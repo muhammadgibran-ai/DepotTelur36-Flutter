@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "380650078791",
+    "project_id": "depottelur36-570a9",
+    "storage_bucket": "depottelur36-570a9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:380650078791:android:24daf66aaf026196bba762",
+        "android_client_info": {
+          "package_name": "com.depottelur36.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAraFVnkdLoKesv6c0WBlIHi952G7DdDpI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
