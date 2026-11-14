@@ -537,28 +537,45 @@ class DatabaseHelper {
   }
 
   /// Mengambil daftar `faktur` lengkap dengan nama supplier & petugas.
-  Future<List<Faktur>> getAllFaktur() async {
+  Future<List<Faktur>> getAllFaktur() => _fetchFaktur();
+
+  /// Mengambil antrean `faktur` yang belum tersinkron (`PENDING`).
+  Future<List<Faktur>> getPendingFaktur() =>
+      _fetchFaktur(whereClause: "WHERE f.sync_status = 'PENDING'");
+
+  Future<List<Faktur>> _fetchFaktur({String whereClause = ''}) async {
     final db = await database;
     final rows = await db.rawQuery('''
-      SELECT f.*, s.nama_supplier, p.nama_petugas
+      SELECT f.*, s.nama_supplier, p.nama_petugas,
+             COALESCE(f.supplier_remote_id, s.remote_id) AS resolved_supplier_remote_id,
+             COALESCE(f.petugas_remote_id, p.remote_id) AS resolved_petugas_remote_id
       FROM faktur f
       LEFT JOIN supplier s ON f.id_supplier = s.id_supplier
       LEFT JOIN petugas p ON f.id_petugas = p.id_petugas
+      $whereClause
       ORDER BY f.id_faktur DESC
     ''');
     final list = <Faktur>[];
     for (final row in rows) {
       final idFaktur = (row['id_faktur'] as num).toInt();
       final detailRows = await db.rawQuery('''
-        SELECT df.*, b.nama_barang, b.satuan
+        SELECT df.*, b.nama_barang, b.satuan,
+               COALESCE(df.barang_remote_id, b.remote_id) AS resolved_barang_remote_id
         FROM detail_faktur df
         LEFT JOIN barang b ON df.id_barang = b.id_barang
         WHERE df.id_faktur = ?
       ''', [idFaktur]);
+      final details = detailRows.map((d) {
+        final item = DetailFaktur.fromMap(d);
+        return item.copyWith(
+          barangRemoteId: d['resolved_barang_remote_id'] as String?,
+        );
+      }).toList();
+      final faktur = Faktur.fromMap(row, details: details);
       list.add(
-        Faktur.fromMap(
-          row,
-          details: detailRows.map(DetailFaktur.fromMap).toList(),
+        faktur.copyWith(
+          supplierRemoteId: row['resolved_supplier_remote_id'] as String?,
+          petugasRemoteId: row['resolved_petugas_remote_id'] as String?,
         ),
       );
     }
@@ -566,32 +583,320 @@ class DatabaseHelper {
   }
 
   /// Mengambil daftar `nota` lengkap dengan nama customer & petugas.
-  Future<List<Nota>> getAllNota() async {
+  Future<List<Nota>> getAllNota() => _fetchNota();
+
+  /// Mengambil antrean `nota` yang belum tersinkron (`PENDING`).
+  Future<List<Nota>> getPendingNota() =>
+      _fetchNota(whereClause: "WHERE n.sync_status = 'PENDING'");
+
+  Future<List<Nota>> _fetchNota({String whereClause = ''}) async {
     final db = await database;
     final rows = await db.rawQuery('''
-      SELECT n.*, c.nama_customer, p.nama_petugas
+      SELECT n.*, c.nama_customer, p.nama_petugas,
+             COALESCE(n.customer_remote_id, c.remote_id) AS resolved_customer_remote_id,
+             COALESCE(n.petugas_remote_id, p.remote_id) AS resolved_petugas_remote_id
       FROM nota n
       LEFT JOIN customer c ON n.id_customer = c.id_customer
       LEFT JOIN petugas p ON n.id_petugas = p.id_petugas
+      $whereClause
       ORDER BY n.id_nota DESC
     ''');
     final list = <Nota>[];
     for (final row in rows) {
       final idNota = (row['id_nota'] as num).toInt();
       final detailRows = await db.rawQuery('''
-        SELECT dn.*, b.nama_barang, b.satuan
+        SELECT dn.*, b.nama_barang, b.satuan,
+               COALESCE(dn.barang_remote_id, b.remote_id) AS resolved_barang_remote_id
         FROM detail_nota dn
         LEFT JOIN barang b ON dn.id_barang = b.id_barang
         WHERE dn.id_nota = ?
       ''', [idNota]);
+      final details = detailRows.map((d) {
+        final item = DetailNota.fromMap(d);
+        return item.copyWith(
+          barangRemoteId: d['resolved_barang_remote_id'] as String?,
+        );
+      }).toList();
+      final nota = Nota.fromMap(row, details: details);
       list.add(
-        Nota.fromMap(
-          row,
-          details: detailRows.map(DetailNota.fromMap).toList(),
+        nota.copyWith(
+          customerRemoteId: row['resolved_customer_remote_id'] as String?,
+          petugasRemoteId: row['resolved_petugas_remote_id'] as String?,
         ),
       );
     }
     return list;
+  }
+
+  // ==================== HELPER SINKRONISASI CLOUD ====================
+
+  Future<List<Supplier>> getPendingSuppliers() async {
+    final db = await database;
+    final rows = await db.query(
+      'supplier',
+      where: "sync_status = 'PENDING'",
+    );
+    return rows.map(Supplier.fromMap).toList();
+  }
+
+  Future<List<Petugas>> getPendingPetugas() async {
+    final db = await database;
+    final rows = await db.query(
+      'petugas',
+      where: "sync_status = 'PENDING'",
+    );
+    return rows.map(Petugas.fromMap).toList();
+  }
+
+  Future<List<Customer>> getPendingCustomers() async {
+    final db = await database;
+    final rows = await db.query(
+      'customer',
+      where: "sync_status = 'PENDING'",
+    );
+    return rows.map(Customer.fromMap).toList();
+  }
+
+  Future<List<Barang>> getPendingBarang() async {
+    final db = await database;
+    final rows = await db.query(
+      'barang',
+      where: "sync_status = 'PENDING'",
+    );
+    return rows.map(Barang.fromMap).toList();
+  }
+
+  /// Menghitung selisih stok dari faktur/nota lokal yang masih `PENDING`
+  /// agar sinkronisasi tidak menggandakan atau menimpa mutasi offline.
+  Future<({int pendingIn, int pendingOut})> getPendingStockDeltaForBarang(
+    int idBarang,
+  ) async {
+    final db = await database;
+    final inRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(df.quantity), 0) AS qty
+      FROM detail_faktur df
+      INNER JOIN faktur f ON df.id_faktur = f.id_faktur
+      WHERE df.id_barang = ? AND f.sync_status = 'PENDING'
+    ''', [idBarang]);
+    final outRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(dn.banyaknya), 0) AS qty
+      FROM detail_nota dn
+      INNER JOIN nota n ON dn.id_nota = n.id_nota
+      WHERE dn.id_barang = ? AND n.sync_status = 'PENDING'
+    ''', [idBarang]);
+    return (
+      pendingIn: Sqflite.firstIntValue(inRows) ?? 0,
+      pendingOut: Sqflite.firstIntValue(outRows) ?? 0,
+    );
+  }
+
+  Future<void> applyCloudSupplier(Supplier cloudSupplier) async {
+    final existing = await getSupplierByRemoteId(cloudSupplier.remoteId);
+    if (existing != null && existing.syncStatus == SyncStatus.pending) {
+      return;
+    }
+    await upsertSupplier(cloudSupplier.copyWith(syncStatus: SyncStatus.synced));
+  }
+
+  Future<void> applyCloudPetugas(Petugas cloudPetugas) async {
+    final existing = await getPetugasByRemoteId(cloudPetugas.remoteId);
+    if (existing != null && existing.syncStatus == SyncStatus.pending) {
+      return;
+    }
+    await upsertPetugas(cloudPetugas.copyWith(syncStatus: SyncStatus.synced));
+  }
+
+  Future<void> applyCloudCustomer(Customer cloudCustomer) async {
+    final existing = await getCustomerByRemoteId(cloudCustomer.remoteId);
+    if (existing != null && existing.syncStatus == SyncStatus.pending) {
+      return;
+    }
+    await upsertCustomer(cloudCustomer.copyWith(syncStatus: SyncStatus.synced));
+  }
+
+  Future<void> applyCloudBarang(Barang cloudBarang) async {
+    final existing = await getBarangByRemoteId(cloudBarang.remoteId);
+    if (existing == null) {
+      await upsertBarang(cloudBarang.copyWith(syncStatus: SyncStatus.synced));
+      return;
+    }
+    if (existing.syncStatus == SyncStatus.pending) {
+      return;
+    }
+    final delta = await getPendingStockDeltaForBarang(existing.idBarang!);
+    final effectiveStock =
+        cloudBarang.stokBarang + delta.pendingIn - delta.pendingOut;
+    await upsertBarang(
+      cloudBarang.copyWith(
+        idBarang: existing.idBarang,
+        stokBarang: effectiveStock < 0 ? 0 : effectiveStock,
+        syncStatus: SyncStatus.synced,
+      ),
+    );
+  }
+
+  /// Menyimpan `faktur` dari Cloud Firestore jika belum ada di SQLite lokal
+  /// (tanpa memodifikasi `stok_barang` karena stok diambil dari koleksi `barang`).
+  Future<bool> insertCloudFakturIfMissing({
+    required String remoteId,
+    required Map<String, dynamic> data,
+  }) async {
+    final db = await database;
+    final existing = await db.query(
+      'faktur',
+      columns: ['id_faktur'],
+      where: 'remote_id = ?',
+      whereArgs: [remoteId],
+      limit: 1,
+    );
+    if (existing.isNotEmpty) {
+      return false;
+    }
+
+    final supplierRemoteId = data['supplier_remote_id'] as String?;
+    final petugasRemoteId = data['petugas_remote_id'] as String?;
+    if (supplierRemoteId == null || petugasRemoteId == null) return false;
+
+    final supplier = await getSupplierByRemoteId(supplierRemoteId);
+    final petugas = await getPetugasByRemoteId(petugasRemoteId);
+    if (supplier?.idSupplier == null || petugas?.idPetugas == null) {
+      return false;
+    }
+
+    final rawDetails = (data['details'] as List<dynamic>?) ?? const [];
+    final resolvedDetails = <DetailFaktur>[];
+    for (final raw in rawDetails) {
+      final map = Map<String, dynamic>.from(raw as Map);
+      final barangRemoteId = map['barang_remote_id'] as String?;
+      if (barangRemoteId == null) return false;
+      final barang = await getBarangByRemoteId(barangRemoteId);
+      if (barang?.idBarang == null) return false;
+      resolvedDetails.add(
+        DetailFaktur(
+          idBarang: barang!.idBarang!,
+          jumlah: (map['jumlah'] as num?)?.toDouble() ?? 0.0,
+          quantity: (map['quantity'] as num?)?.toInt() ?? 0,
+          barangRemoteId: barangRemoteId,
+        ),
+      );
+    }
+    if (resolvedDetails.isEmpty) return false;
+
+    await db.transaction((txn) async {
+      final fakturId = await txn.insert('faktur', {
+        'no_faktur': (data['no_faktur'] as String?) ?? '',
+        'tanggal_faktur': (data['tanggal_faktur'] as String?) ?? '',
+        'total': (data['total'] as num?)?.toDouble() ?? 0.0,
+        'id_supplier': supplier!.idSupplier!,
+        'id_petugas': petugas!.idPetugas!,
+        'remote_id': remoteId,
+        'supplier_remote_id': supplierRemoteId,
+        'petugas_remote_id': petugasRemoteId,
+        'sync_status': SyncStatus.synced.value,
+        'updated_at': (data['updated_at'] as String?) ??
+            DateTime.now().toIso8601String(),
+      });
+      for (final item in resolvedDetails) {
+        await txn.insert(
+          'detail_faktur',
+          item.copyWith(idFaktur: fakturId).toMap(),
+        );
+      }
+    });
+    return true;
+  }
+
+  /// Menyimpan `nota` dari Cloud Firestore jika belum ada di SQLite lokal
+  /// (tanpa memodifikasi `stok_barang` karena stok diambil dari koleksi `barang`).
+  Future<bool> insertCloudNotaIfMissing({
+    required String remoteId,
+    required Map<String, dynamic> data,
+  }) async {
+    final db = await database;
+    final existing = await db.query(
+      'nota',
+      columns: ['id_nota'],
+      where: 'remote_id = ?',
+      whereArgs: [remoteId],
+      limit: 1,
+    );
+    if (existing.isNotEmpty) {
+      return false;
+    }
+
+    final petugasRemoteId = data['petugas_remote_id'] as String?;
+    final customerRemoteId = data['customer_remote_id'] as String?;
+    if (petugasRemoteId == null || customerRemoteId == null) return false;
+
+    final petugas = await getPetugasByRemoteId(petugasRemoteId);
+    final customer = await getCustomerByRemoteId(customerRemoteId);
+    if (petugas?.idPetugas == null || customer?.idCustomer == null) {
+      return false;
+    }
+
+    final rawDetails = (data['details'] as List<dynamic>?) ?? const [];
+    final resolvedDetails = <DetailNota>[];
+    for (final raw in rawDetails) {
+      final map = Map<String, dynamic>.from(raw as Map);
+      final barangRemoteId = map['barang_remote_id'] as String?;
+      if (barangRemoteId == null) return false;
+      final barang = await getBarangByRemoteId(barangRemoteId);
+      if (barang?.idBarang == null) return false;
+      resolvedDetails.add(
+        DetailNota(
+          idBarang: barang!.idBarang!,
+          jumlah: (map['jumlah'] as num?)?.toDouble() ?? 0.0,
+          banyaknya: (map['banyaknya'] as num?)?.toInt() ?? 0,
+          barangRemoteId: barangRemoteId,
+        ),
+      );
+    }
+    if (resolvedDetails.isEmpty) return false;
+
+    await db.transaction((txn) async {
+      final notaId = await txn.insert('nota', {
+        'tanggal_nota': (data['tanggal_nota'] as String?) ?? '',
+        'total': (data['total'] as num?)?.toDouble() ?? 0.0,
+        'id_petugas': petugas!.idPetugas!,
+        'id_customer': customer!.idCustomer!,
+        'remote_id': remoteId,
+        'petugas_remote_id': petugasRemoteId,
+        'customer_remote_id': customerRemoteId,
+        'sync_status': SyncStatus.synced.value,
+        'updated_at': (data['updated_at'] as String?) ??
+            DateTime.now().toIso8601String(),
+      });
+      for (final item in resolvedDetails) {
+        await txn.insert(
+          'detail_nota',
+          item.copyWith(idNota: notaId).toMap(),
+        );
+      }
+    });
+    return true;
+  }
+
+  Future<bool> hasRemoteRecord(String table, String remoteId) async {
+    const allowed = {
+      'supplier',
+      'petugas',
+      'customer',
+      'barang',
+      'faktur',
+      'nota',
+    };
+    if (!allowed.contains(table)) {
+      throw ArgumentError('Tabel tidak valid: $table');
+    }
+    final db = await database;
+    final rows = await db.query(
+      table,
+      columns: ['remote_id'],
+      where: 'remote_id = ?',
+      whereArgs: [remoteId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
   }
 
   Future<void> markSynced(String table, String remoteId) async {
