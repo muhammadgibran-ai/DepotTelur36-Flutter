@@ -29,7 +29,7 @@ class DatabaseHelper {
   DatabaseHelper.forTesting({required this.customDbPath});
 
   static const String databaseName = 'depottelur36.db';
-  static const int databaseVersion = 1;
+  static const int databaseVersion = 3;
 
   String? customDbPath;
   Database? _database;
@@ -51,7 +51,44 @@ class DatabaseHelper {
         await db.execute('PRAGMA foreign_keys = ON');
       },
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(
+        "ALTER TABLE petugas ADD COLUMN email TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE petugas ADD COLUMN account_id TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE petugas ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_petugas_email ON petugas(email)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_petugas_account_id ON petugas(account_id)');
+    }
+    if (oldVersion < 3) {
+      // Hapus transaksi contoh yang masih merujuk akun testing seed yang belum termigrasi
+      // agar pembersihan tabel `petugas` tidak melanggar FK ON DELETE RESTRICT.
+      const testingPetugasIds = '''
+        SELECT id_petugas FROM petugas
+        WHERE remote_id IN ('seed-petugas-owner', 'seed-petugas-kasir-1')
+          AND password_hash = ''
+      ''';
+      await db.execute(
+        'DELETE FROM faktur WHERE id_petugas IN ($testingPetugasIds)',
+      );
+      await db.execute(
+        'DELETE FROM nota WHERE id_petugas IN ($testingPetugasIds)',
+      );
+      await db.delete(
+        'petugas',
+        where:
+            "remote_id IN ('seed-petugas-owner', 'seed-petugas-kasir-1') AND password_hash = ''",
+      );
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -75,6 +112,9 @@ class DatabaseHelper {
         nama_petugas TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'PETUGAS',
         pin TEXT NOT NULL DEFAULT '1234',
+        email TEXT NOT NULL DEFAULT '',
+        account_id TEXT NOT NULL DEFAULT '',
+        password_hash TEXT NOT NULL DEFAULT '',
         remote_id TEXT NOT NULL UNIQUE,
         sync_status TEXT NOT NULL DEFAULT 'PENDING',
         updated_at TEXT NOT NULL
@@ -176,38 +216,18 @@ class DatabaseHelper {
     await db.execute('CREATE INDEX idx_supplier_sync ON supplier(sync_status)');
     await db.execute('CREATE INDEX idx_customer_sync ON customer(sync_status)');
     await db.execute('CREATE INDEX idx_petugas_sync ON petugas(sync_status)');
+    await db.execute('CREATE INDEX idx_petugas_email ON petugas(email)');
+    await db.execute('CREATE INDEX idx_petugas_account_id ON petugas(account_id)');
     await db.execute('CREATE INDEX idx_faktur_sync ON faktur(sync_status)');
     await db.execute('CREATE INDEX idx_nota_sync ON nota(sync_status)');
 
     await _seedInitialData(db);
   }
 
-  /// Mengisi data awal standar DepotTelur36 dengan `remote_id` deterministik
-  /// agar langsung siap pakai saat offline dan tidak menduplikasi data di Cloud.
+  /// Mengisi data master awal DepotTelur36 dengan `remote_id` deterministik
+  /// agar siap pakai saat offline tanpa menyertakan akun testing pada tabel `petugas`.
   Future<void> _seedInitialData(Database db) async {
     final now = DateTime(2026, 2, 16).toIso8601String();
-
-    final petugasSeed = [
-      {
-        'nama_petugas': 'Owner DepotTelur36',
-        'role': UserRole.owner.value,
-        'pin': '1234',
-        'remote_id': 'seed-petugas-owner',
-        'sync_status': SyncStatus.synced.value,
-        'updated_at': now,
-      },
-      {
-        'nama_petugas': 'Petugas Kasir & Gudang',
-        'role': UserRole.petugas.value,
-        'pin': '1111',
-        'remote_id': 'seed-petugas-kasir-1',
-        'sync_status': SyncStatus.synced.value,
-        'updated_at': now,
-      },
-    ];
-    for (final row in petugasSeed) {
-      await db.insert('petugas', row);
-    }
 
     final supplierSeed = [
       {
@@ -442,15 +462,55 @@ class DatabaseHelper {
     return Petugas.fromMap(rows.first);
   }
 
+  Future<Petugas?> getPetugasByEmail(String email) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty) return null;
+    final db = await database;
+    final rows = await db.query(
+      'petugas',
+      where: 'LOWER(email) = ?',
+      whereArgs: [normalized],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Petugas.fromMap(rows.first);
+  }
+
+  Future<Petugas?> findPetugasByIdentifier(String identifier) async {
+    final normalized = identifier.trim().toLowerCase();
+    if (normalized.isEmpty) return null;
+    final db = await database;
+    final rows = await db.query(
+      'petugas',
+      where: 'LOWER(email) = ? OR LOWER(account_id) = ? OR LOWER(remote_id) = ?',
+      whereArgs: [normalized, normalized, normalized],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Petugas.fromMap(rows.first);
+  }
+
   Future<int> upsertPetugas(Petugas petugas) async {
     final db = await database;
-    final existing = await getPetugasByRemoteId(petugas.remoteId);
+    var existing = await getPetugasByRemoteId(petugas.remoteId);
+    existing ??= petugas.email.trim().isNotEmpty
+        ? await getPetugasByEmail(petugas.email)
+        : null;
     if (existing == null) {
       return db.insert('petugas', petugas.toMap());
     }
+    final merged = petugas.copyWith(
+      idPetugas: existing.idPetugas,
+      email: petugas.email.isEmpty ? existing.email : petugas.email,
+      accountId:
+          petugas.accountId.isEmpty ? existing.accountId : petugas.accountId,
+      passwordHash: petugas.passwordHash.isEmpty
+          ? existing.passwordHash
+          : petugas.passwordHash,
+    );
     return db.update(
       'petugas',
-      petugas.copyWith(idPetugas: existing.idPetugas).toMap(),
+      merged.toMap(),
       where: 'id_petugas = ?',
       whereArgs: [existing.idPetugas],
     );

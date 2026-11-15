@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:depot_telur_36/models/auth_session.dart';
 import 'package:depot_telur_36/models/barang.dart';
 import 'package:depot_telur_36/models/customer.dart';
 import 'package:depot_telur_36/models/petugas.dart';
@@ -154,6 +155,101 @@ void main() {
       expect(parsed.total, 57000.0);
       expect(parsed.details.first.banyaknya, 2);
       expect(nota.toFirestore()['details'], hasLength(1));
+    });
+
+    test('Petugas auth fields SQLite & Firestore serialization omits passwordHash', () {
+      final petugas = Petugas(
+        idPetugas: 7,
+        namaPetugas: 'Budi Owner',
+        role: UserRole.owner,
+        pin: '1234',
+        email: 'owner@depottelur36.com',
+        accountId: 'owner01',
+        passwordHash: 'salt:hashedSecret',
+        remoteId: 'ptg-owner-1',
+        syncStatus: SyncStatus.synced,
+        updatedAt: fixedTime,
+      );
+
+      final sqliteMap = petugas.toMap();
+      expect(sqliteMap['email'], 'owner@depottelur36.com');
+      expect(sqliteMap['account_id'], 'owner01');
+      expect(sqliteMap['password_hash'], 'salt:hashedSecret');
+
+      final parsedLocal = Petugas.fromMap(sqliteMap);
+      expect(parsedLocal.email, 'owner@depottelur36.com');
+      expect(parsedLocal.accountId, 'owner01');
+      expect(parsedLocal.passwordHash, 'salt:hashedSecret');
+      expect(parsedLocal.isOwner, isTrue);
+
+      final firestoreMap = petugas.toFirestore();
+      expect(firestoreMap['email'], 'owner@depottelur36.com');
+      expect(firestoreMap['account_id'], 'owner01');
+      expect(firestoreMap.containsKey('password_hash'), isFalse);
+
+      final parsedCloud = Petugas.fromFirestore(firestoreMap, 'ptg-owner-1');
+      expect(parsedCloud.email, 'owner@depottelur36.com');
+      expect(parsedCloud.accountId, 'owner01');
+      expect(parsedCloud.passwordHash, isEmpty);
+      expect(parsedCloud.syncStatus, SyncStatus.synced);
+    });
+  });
+
+  group('AuthSession Serialization, Edge Cases & Invalid Payloads', () {
+    test('roundtrip JSON mempertahankan seluruh field dan status isOwner', () {
+      final session = AuthSession(
+        uid: 'uid-owner-1',
+        email: 'owner@depottelur36.com',
+        accountId: 'owner01',
+        displayName: 'Pak Owner',
+        role: UserRole.owner,
+        petugasRemoteId: 'ptg-owner-1',
+        provider: AuthProviderType.google,
+        signedInAt: fixedTime,
+      );
+
+      expect(session.isOwner, isTrue);
+      final parsed = AuthSession.tryParseJson(session.toJson());
+      expect(parsed, isNotNull);
+      expect(parsed!.uid, 'uid-owner-1');
+      expect(parsed.email, 'owner@depottelur36.com');
+      expect(parsed.accountId, 'owner01');
+      expect(parsed.displayName, 'Pak Owner');
+      expect(parsed.role, UserRole.owner);
+      expect(parsed.petugasRemoteId, 'ptg-owner-1');
+      expect(parsed.provider, AuthProviderType.google);
+      expect(parsed.signedInAt, fixedTime);
+
+      final updated = parsed.copyWith(role: UserRole.petugas);
+      expect(updated.isOwner, isFalse);
+      expect(updated.accountId, 'owner01');
+    });
+
+    test('tryParseJson menolak payload null, kosong, bukan object, atau ID spasi saja', () {
+      expect(AuthSession.tryParseJson(null), isNull);
+      expect(AuthSession.tryParseJson(''), isNull);
+      expect(AuthSession.tryParseJson('   '), isNull);
+      expect(AuthSession.tryParseJson('{bukan-json'), isNull);
+      expect(AuthSession.tryParseJson('[1, 2, 3]'), isNull);
+      expect(AuthSession.tryParseJson('{"email":"a@b.com"}'), isNull);
+      expect(
+        AuthSession.tryParseJson('{"uid":"   ","petugas_remote_id":"  "}'),
+        isNull,
+      );
+      expect(
+        AuthSession.tryParseJson('{"uid":123,"petugas_remote_id":"ptg-1"}'),
+        isNull,
+      );
+    });
+
+    test('tryParseJson menerima sesi bila minimal salah satu uid atau petugasRemoteId valid & memfallback enum tak dikenal', () {
+      final parsed = AuthSession.tryParseJson(
+        '{"uid":"","petugas_remote_id":"seed-1","role":"SUPERADMIN","provider":"UNKNOWN","signed_in_at":"invalid-date"}',
+      );
+      expect(parsed, isNotNull);
+      expect(parsed!.role, UserRole.petugas);
+      expect(parsed.provider, AuthProviderType.emailPassword);
+      expect(parsed.petugasRemoteId, 'seed-1');
     });
   });
 }

@@ -1,122 +1,113 @@
+import 'dart:async';
+
+import 'package:firebase_core/firebase_core.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:provider/provider.dart';
 
-void main() {
-  runApp(const MyApp());
+import 'package:depot_telur_36/core/database/database_helper.dart';
+import 'package:depot_telur_36/core/theme/app_theme.dart';
+import 'package:depot_telur_36/repositories/auth_repository.dart';
+import 'package:depot_telur_36/repositories/inventory_repository.dart';
+import 'package:depot_telur_36/screens/auth/splash_screen.dart';
+import 'package:depot_telur_36/services/sync_service.dart';
+import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp();
+    }
+  } catch (e, st) {
+    debugPrint('Firebase initialization skipped: $e\n$st');
+  }
+
+  runApp(const DepotTelur36App());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+/// Root widget aplikasi DepotTelur36 (Offline-First POS & Manajemen Stok).
+class DepotTelur36App extends StatefulWidget {
+  const DepotTelur36App({
+    super.key,
+    this.authViewModelOverride,
+    this.splashDelay = const Duration(milliseconds: 1200),
+  });
 
-  // This widget is the root of your application.
+  final AuthViewModel? authViewModelOverride;
+  final Duration splashDelay;
+
+  @override
+  State<DepotTelur36App> createState() => _DepotTelur36AppState();
+}
+
+class _DepotTelur36AppState extends State<DepotTelur36App> {
+  SyncService? _syncService;
+  InventoryRepository? _inventoryRepository;
+  AuthViewModel? _ownedAuthViewModel;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.authViewModelOverride == null) {
+      final hasFirebase = Firebase.apps.isNotEmpty;
+      final db = DatabaseHelper.instance;
+      final syncService = SyncService(dbHelper: db);
+      final inventoryRepository = InventoryRepository(
+        dbHelper: db,
+        syncService: syncService,
+      );
+      if (hasFirebase) {
+        unawaited(
+          inventoryRepository.initialize().catchError((Object e) {
+            debugPrint('Inventory sync initialization deferred: $e');
+          }),
+        );
+      }
+
+      final authRepository = AuthRepository(
+        dbHelper: db,
+        syncService: hasFirebase ? syncService : null,
+      );
+
+      _syncService = syncService;
+      _inventoryRepository = inventoryRepository;
+      _ownedAuthViewModel = AuthViewModel(repository: authRepository);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ownedAuthViewModel?.dispose();
+    _inventoryRepository?.dispose();
+    _syncService?.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+    final overrideVm = widget.authViewModelOverride;
+
+    final app = MaterialApp(
+      title: 'DepotTelur36',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.light(),
+      home: SplashScreen(minimumDuration: widget.splashDelay),
     );
-  }
-}
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+    if (overrideVm != null) {
+      return ChangeNotifierProvider<AuthViewModel>.value(
+        value: overrideVm,
+        child: app,
+      );
+    }
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider<SyncService>.value(value: _syncService!),
+        Provider<InventoryRepository>.value(value: _inventoryRepository!),
+        ChangeNotifierProvider<AuthViewModel>.value(value: _ownedAuthViewModel!),
+      ],
+      child: app,
     );
   }
 }
