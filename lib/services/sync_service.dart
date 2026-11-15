@@ -486,6 +486,7 @@ class SyncService extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
     _connectivitySub?.cancel();
     for (final sub in _firestoreSubs) {

@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'package:depot_telur_36/core/theme/app_theme.dart';
 import 'package:depot_telur_36/screens/auth/welcome_screen.dart';
-import 'package:depot_telur_36/screens/home/role_home_stub_screen.dart';
+import 'package:depot_telur_36/screens/home/role_home_shell_screen.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/widgets/brand_lockup.dart';
 
@@ -82,7 +82,7 @@ class _SplashScreenState extends State<SplashScreen>
     final session = auth.session;
     if (auth.status == AuthStatus.authenticated && session != null) {
       Navigator.of(context).pushReplacement(
-        buildAuthRoute(RoleHomeStubScreen(initialSession: session)),
+        buildAuthRoute(RoleHomeShellScreen(initialSession: session)),
       );
       return;
     }

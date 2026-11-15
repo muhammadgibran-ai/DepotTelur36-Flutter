@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'package:depot_telur_36/repositories/auth_repository.dart';
 import 'package:depot_telur_36/screens/auth/sign_in_screen.dart';
-import 'package:depot_telur_36/screens/home/role_home_stub_screen.dart';
+import 'package:depot_telur_36/screens/home/role_home_shell_screen.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_form_shell.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';

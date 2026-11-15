@@ -1,20 +1,26 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:depot_telur_36/core/database/database_helper.dart';
 import 'package:depot_telur_36/core/theme/app_theme.dart';
 import 'package:depot_telur_36/main.dart';
 import 'package:depot_telur_36/models/auth_session.dart';
+import 'package:depot_telur_36/models/dashboard_models.dart';
 import 'package:depot_telur_36/models/petugas.dart';
 import 'package:depot_telur_36/models/sync_status.dart';
 import 'package:depot_telur_36/repositories/auth_repository.dart';
+import 'package:depot_telur_36/repositories/inventory_repository.dart';
 import 'package:depot_telur_36/screens/auth/sign_in_screen.dart';
 import 'package:depot_telur_36/screens/auth/sign_up_screen.dart';
 import 'package:depot_telur_36/screens/auth/welcome_screen.dart';
-import 'package:depot_telur_36/screens/home/role_home_stub_screen.dart';
+import 'package:depot_telur_36/screens/home/role_home_shell_screen.dart';
 import 'package:depot_telur_36/services/auth_gateway.dart';
+import 'package:depot_telur_36/services/sync_service.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
+import 'package:depot_telur_36/widgets/dashboard_widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:material_ui/material_ui.dart';
@@ -128,10 +134,48 @@ class _WidgetFakeAuthGateway implements AuthGateway {
   }
 }
 
+class _WidgetFakeSyncService extends SyncService {
+  _WidgetFakeSyncService({required super.dbHelper})
+      : super(
+          firestore: _WidgetDummyFirestore(),
+          connectivity: _WidgetDummyConnectivity(),
+        );
+
+  int manualSyncCalls = 0;
+
+  @override
+  Future<void> start() async {}
+
+  @override
+  Future<void> trySyncIfOnline() async {}
+
+  @override
+  Future<void> syncNow() async {
+    manualSyncCalls++;
+  }
+}
+
+class _WidgetDummyFirestore implements FirebaseFirestore {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _WidgetDummyConnectivity implements Connectivity {
+  @override
+  Stream<List<ConnectivityResult>> get onConnectivityChanged =>
+      const Stream.empty();
+
+  @override
+  Future<List<ConnectivityResult>> checkConnectivity() async =>
+      const [ConnectivityResult.wifi];
+}
+
 void main() {
   late Directory tempDir;
   late DatabaseHelper dbHelper;
   late _WidgetFakeAuthGateway gateway;
+  late _WidgetFakeSyncService syncService;
+  late InventoryRepository inventoryRepository;
   late SharedPreferences prefs;
   late AuthRepository repository;
   late AuthViewModel viewModel;
@@ -153,6 +197,11 @@ void main() {
     await dbHelper.database;
 
     gateway = _WidgetFakeAuthGateway();
+    syncService = _WidgetFakeSyncService(dbHelper: dbHelper);
+    inventoryRepository = InventoryRepository(
+      dbHelper: dbHelper,
+      syncService: syncService,
+    );
     repository = AuthRepository(
       dbHelper: dbHelper,
       gateway: gateway,
@@ -164,6 +213,7 @@ void main() {
 
   tearDown(() async {
     viewModel.dispose();
+    await inventoryRepository.dispose();
     final db = await dbHelper.database;
     await db.close();
     if (tempDir.existsSync()) {
@@ -172,8 +222,12 @@ void main() {
   });
 
   Widget wrapScreen(Widget screen, {bool disableAnimations = false}) {
-    return ChangeNotifierProvider<AuthViewModel>.value(
-      value: viewModel,
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider<SyncService>.value(value: syncService),
+        Provider<InventoryRepository>.value(value: inventoryRepository),
+        ChangeNotifierProvider<AuthViewModel>.value(value: viewModel),
+      ],
       child: MaterialApp(
         theme: AppTheme.light(),
         builder: (context, child) {
@@ -211,6 +265,10 @@ void main() {
       );
     }
     await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 60)),
+    );
+    await tester.pump();
     await tester.pumpAndSettle();
   }
 
@@ -228,6 +286,7 @@ void main() {
     await tester.pumpWidget(
       DepotTelur36App(
         authViewModelOverride: viewModel,
+        inventoryRepositoryOverride: inventoryRepository,
         splashDelay: Duration.zero,
       ),
     );
@@ -269,7 +328,7 @@ void main() {
 
       await pumpApp(tester);
 
-      expect(find.byType(RoleHomeStubScreen), findsOneWidget);
+      expect(find.byType(RoleHomeShellScreen), findsOneWidget);
       expect(find.text('DepotTelur36 Owner'), findsOneWidget);
       expect(find.text('Halo, Owner DepotTelur36'), findsOneWidget);
       expect(find.text('Sign Out'), findsOneWidget);
@@ -333,7 +392,7 @@ void main() {
         );
         await settleWithIo(tester);
 
-        expect(find.byType(RoleHomeStubScreen), findsOneWidget);
+        expect(find.byType(RoleHomeShellScreen), findsOneWidget);
         expect(find.text('DepotTelur36 Owner'), findsOneWidget);
         expect(find.text('Owner'), findsOneWidget);
 
@@ -433,7 +492,7 @@ void main() {
       await tester.tap(signUpCta);
       await settleWithIo(tester);
 
-      expect(find.byType(RoleHomeStubScreen), findsOneWidget);
+      expect(find.byType(RoleHomeShellScreen), findsOneWidget);
       expect(find.text('DepotTelur36 Kasir'), findsOneWidget);
       expect(find.text('Kasir & Gudang'), findsOneWidget);
       expect(find.text('Halo, Siti Kasir'), findsOneWidget);
@@ -455,7 +514,7 @@ void main() {
       await tester.tap(googleBtn);
       await settleWithIo(tester);
 
-      expect(find.byType(RoleHomeStubScreen), findsOneWidget);
+      expect(find.byType(RoleHomeShellScreen), findsOneWidget);
       expect(find.text('DepotTelur36 Kasir'), findsOneWidget);
       expect(find.text('Halo, Kasir Google'), findsOneWidget);
     });
@@ -652,20 +711,317 @@ void main() {
         await tester.pump();
         expect(find.byType(SignInScreen), findsOneWidget);
 
-        // Selesaikan request -> harus masuk ke RoleHomeStubScreen
+        // Selesaikan request -> harus masuk ke RoleHomeShellScreen
         gate.complete();
         await settleWithIo(tester);
 
-        expect(find.byType(RoleHomeStubScreen), findsOneWidget);
+        expect(find.byType(RoleHomeShellScreen), findsOneWidget);
         expect(find.text('DepotTelur36 Kasir'), findsOneWidget);
       },
     );
+  });
+
+  group('Fungsi 2 - Dashboard Beranda RBAC, Tab, Search & Notifikasi', () {
+    AuthSession sampleOwner() => AuthSession(
+          uid: 'seed-owner',
+          email: 'owner@depottelur36.com',
+          accountId: 'owner01',
+          displayName: 'Budi Owner',
+          role: UserRole.owner,
+          petugasRemoteId: 'seed-petugas-owner',
+          provider: AuthProviderType.emailPassword,
+          signedInAt: DateTime(2026, 2, 16),
+        );
+
+    AuthSession sampleOperator() => AuthSession(
+          uid: 'seed-kasir',
+          email: 'kasir@depottelur36.com',
+          accountId: 'kasir01',
+          displayName: 'Siti Kasir',
+          role: UserRole.petugas,
+          petugasRemoteId: 'seed-petugas-kasir-1',
+          provider: AuthProviderType.emailPassword,
+          signedInAt: DateTime(2026, 2, 16),
+        );
+
+    Future<void> pumpShell(
+      WidgetTester tester,
+      AuthSession session, {
+      Size size = const Size(390, 844),
+      double textScale = 1.0,
+      bool disableAnimations = false,
+    }) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<SyncService>.value(value: syncService),
+            Provider<InventoryRepository>.value(value: inventoryRepository),
+            ChangeNotifierProvider<AuthViewModel>.value(value: viewModel),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            builder: (context, child) {
+              return MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  disableAnimations: disableAnimations,
+                  textScaler: TextScaler.linear(textScale),
+                ),
+                child: child!,
+              );
+            },
+            home: RoleHomeShellScreen(initialSession: session),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 60)),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('Owner menampilkan menu Manajerial, 4 tab RBAC & navigasi Lihat Semua', (
+      tester,
+    ) async {
+      await pumpShell(tester, sampleOwner());
+
+      expect(find.text('DepotTelur36 Owner'), findsOneWidget);
+      expect(find.text('Fungsi Manajerial'), findsOneWidget);
+      expect(find.text('Khusus Owner'), findsOneWidget);
+      expect(find.text('Atur Harga'), findsOneWidget);
+      expect(find.text('Riwayat Faktur'), findsOneWidget);
+      expect(find.text('Data Supplier'), findsOneWidget);
+      expect(find.text('Akun Petugas'), findsOneWidget);
+
+      expect(find.text('Beranda'), findsOneWidget);
+      expect(find.text('Omzet'), findsOneWidget);
+      expect(find.text('Nota'), findsOneWidget);
+      expect(find.text('Master'), findsOneWidget);
+
+      // Pastikan stok menipis awal dari SQLite seed muncul
+      expect(
+        find.text('Stok Menipis · Minyak Goreng Kemasan 1 Liter'),
+        findsOneWidget,
+      );
+
+      // Tap Lihat Semua -> pindah ke tab Master
+      await tester.tap(find.text('Lihat Semua'));
+      await tester.pumpAndSettle();
+      expect(find.text('Katalog Barang & Master Entitas'), findsOneWidget);
+
+      // Tap tab Omzet
+      await tester.tap(find.text('Omzet'));
+      await tester.pumpAndSettle();
+      expect(find.text('Ringkasan Omzet & Arus Kas'), findsOneWidget);
+    });
+
+    testWidgets('Operator tidak memiliki akses Omzet/Atur Harga dan Restock mengarah ke Faktur', (
+      tester,
+    ) async {
+      await pumpShell(tester, sampleOperator());
+
+      expect(find.text('DepotTelur36 Kasir'), findsOneWidget);
+      expect(find.text('Fungsi Operasional'), findsOneWidget);
+      expect(find.text('Kasir & Gudang'), findsOneWidget);
+      expect(find.text('Riwayat Nota'), findsOneWidget);
+      expect(find.text('Pelanggan'), findsOneWidget);
+
+      expect(find.text('Kasir'), findsOneWidget);
+      expect(find.text('Faktur'), findsOneWidget);
+      expect(find.text('Stok'), findsOneWidget);
+
+      // RBAC UI Check: fitur khusus Owner tidak ada di pohon widget Operator
+      expect(find.text('Omzet'), findsNothing);
+      expect(find.text('Atur Harga'), findsNothing);
+      expect(find.text('Akun Petugas'), findsNothing);
+
+      // Tap Restock pada LowStockAlertCard -> pindah ke Faktur + SnackBar
+      await tester.tap(find.text('Restock').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Faktur Stok Masuk Supplier'), findsOneWidget);
+      expect(
+        find.textContaining('Siap restock Minyak Goreng Kemasan 1 Liter'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Pencarian live & Quick Filter menyaring barang + reset kosong', (
+      tester,
+    ) async {
+      await pumpShell(tester, sampleOperator());
+
+      // Buka bar filter cepat
+      await tester.tap(find.byTooltip('Filter cepat'));
+      await tester.pumpAndSettle();
+      expect(find.text('Stok Menipis'), findsOneWidget);
+
+      await tester.tap(find.text('Stok Menipis'));
+      await tester.pumpAndSettle();
+      expect(find.text('Telur Ayam Negeri'), findsNothing);
+      expect(
+        find.text('Stok Menipis · Minyak Goreng Kemasan 1 Liter'),
+        findsOneWidget,
+      );
+
+      // Cari query tidak ditemukan
+      await tester.enterText(find.byType(TextField), 'barang_tidak_ada_xyz');
+      await tester.pumpAndSettle();
+      expect(find.text('Tidak ada barang yang cocok'), findsOneWidget);
+
+      // Reset filter & pencarian
+      final scrollable = find.byWidgetPredicate(
+        (w) => w is ListView && w.scrollDirection == Axis.vertical,
+      );
+      await tester.drag(scrollable, const Offset(0, -250));
+      await tester.pumpAndSettle();
+
+      final resetEmptyBtn = find.text('Reset Filter & Pencarian');
+      await tester.tap(resetEmptyBtn);
+      await tester.pumpAndSettle();
+      expect(find.text('Telur Ayam Negeri'), findsOneWidget);
+    });
+
+    testWidgets('Pusat Notifikasi menampilkan badge, Tandai Semua & Sinkron manual', (
+      tester,
+    ) async {
+      await pumpShell(tester, sampleOwner());
+
+      // 2 alert awal (Minyak Goreng 8 <= 10 & Beras 18 <= 20)
+      expect(find.text('2'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Notifikasi & Sinkronisasi'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Notifikasi & Sinkronisasi'), findsOneWidget);
+      expect(find.text('2 peringatan belum dibaca'), findsOneWidget);
+
+      await tester.tap(find.text('Sinkron'));
+      await tester.pump();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 80)),
+      );
+      await tester.pumpAndSettle();
+      expect(syncService.manualSyncCalls, 1);
+
+      await tester.tap(find.text('Tandai Semua'));
+      await tester.pumpAndSettle();
+      expect(find.text('Semua notifikasi terbaca'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Tutup notifikasi'));
+      await tester.pumpAndSettle();
+      expect(find.text('2'), findsNothing);
+    });
+
+    testWidgets('Compact viewport (320x568), skala teks 1.4x & Reduce Motion pada Owner dan Operator bebas overflow', (
+      tester,
+    ) async {
+      for (final session in [sampleOwner(), sampleOperator()]) {
+        await pumpShell(
+          tester,
+          session,
+          size: const Size(320, 568),
+          textScale: 1.4,
+          disableAnimations: true,
+        );
+        expect(tester.takeException(), isNull);
+      }
+    });
+
+    testWidgets('Tombol Back di tab non-Beranda kembali ke Beranda dan TextField membatasi panjang query', (
+      tester,
+    ) async {
+      await pumpShell(tester, sampleOwner());
+
+      await tester.tap(find.text('Master'));
+      await tester.pumpAndSettle();
+      expect(find.text('Katalog Barang & Master Entitas'), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(RoleHomeShellScreen), findsOneWidget);
+      expect(find.text('Fungsi Manajerial'), findsOneWidget);
+      expect(find.text('Katalog Barang & Master Entitas'), findsNothing);
+
+      final searchField = find.byType(TextField);
+      final fieldWidget = tester.widget<TextField>(searchField);
+      expect(fieldWidget.maxLength, kMaxSearchQueryLength);
+
+      await tester.enterText(searchField, 'T' * 120);
+      await tester.pumpAndSettle();
+      expect(
+        fieldWidget.controller?.text.length,
+        lessThanOrEqualTo(kMaxSearchQueryLength),
+      );
+    });
+
+    testWidgets('NotificationCenterSheet menampilkan syncErrorMessage dengan aman tanpa overflow', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      var syncTapped = 0;
+      await tester.pumpWidget(
+        wrapScreen(
+          Scaffold(
+            body: NotificationCenterSheet(
+              notifications: [
+                AppNotificationItem(
+                  id: 'stock-low:1:8',
+                  title: 'Stok Menipis · Minyak Goreng 1L',
+                  message: 'Sisa 8 Pouch (batas minimum 10).',
+                  severity: NotificationSeverity.warning,
+                  createdAt: DateTime(2026, 2, 16),
+                  isRead: false,
+                  barangRemoteId: 'minyak-1l',
+                  barangNama: 'Minyak Goreng 1L',
+                  currentStock: 8,
+                  satuan: 'Pouch',
+                ),
+              ],
+              unreadCount: 1,
+              syncState: const SyncState(isOnline: true, pendingCount: 1),
+              isManualSyncing: false,
+              syncErrorMessage: 'Gagal menjalankan sinkronisasi manual.',
+              onMarkRead: (_) {},
+              onMarkAllRead: () {},
+              onTriggerSync: () => syncTapped++,
+              onRestockItem: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Gagal menjalankan sinkronisasi manual.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Sinkron'));
+      await tester.pumpAndSettle();
+      expect(syncTapped, 1);
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('Accessibility & Contrast Audits', () {
     Future<void> auditScreen(WidgetTester tester, Widget screen) async {
       final handle = tester.ensureSemantics();
       await tester.pumpWidget(wrapScreen(screen));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
       await tester.pumpAndSettle();
 
       await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
@@ -687,12 +1043,12 @@ void main() {
       await auditScreen(tester, const SignUpScreen());
     });
 
-    testWidgets('RoleHomeStubScreen memenuhi standar aksesibilitas', (
+    testWidgets('RoleHomeShellScreen Owner memenuhi standar aksesibilitas', (
       tester,
     ) async {
       await auditScreen(
         tester,
-        RoleHomeStubScreen(
+        RoleHomeShellScreen(
           initialSession: AuthSession(
             uid: 'seed-owner',
             email: 'owner@depottelur36.com',
@@ -700,6 +1056,26 @@ void main() {
             displayName: 'Owner DepotTelur36',
             role: UserRole.owner,
             petugasRemoteId: 'seed-petugas-owner',
+            provider: AuthProviderType.emailPassword,
+            signedInAt: DateTime(2026, 2, 16),
+          ),
+        ),
+      );
+    });
+
+    testWidgets('RoleHomeShellScreen Operator memenuhi standar aksesibilitas', (
+      tester,
+    ) async {
+      await auditScreen(
+        tester,
+        RoleHomeShellScreen(
+          initialSession: AuthSession(
+            uid: 'seed-kasir',
+            email: 'kasir@depottelur36.com',
+            accountId: 'kasir01',
+            displayName: 'Kasir DepotTelur36',
+            role: UserRole.petugas,
+            petugasRemoteId: 'seed-petugas-kasir-1',
             provider: AuthProviderType.emailPassword,
             signedInAt: DateTime(2026, 2, 16),
           ),

@@ -18,6 +18,8 @@ class TactilePillButton extends StatefulWidget {
     this.isLoading = false,
     this.loadingLabel = 'Memproses...',
     this.height = 54,
+    this.padding = const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+    this.fontSize = 15,
   });
 
   final String label;
@@ -27,6 +29,8 @@ class TactilePillButton extends StatefulWidget {
   final bool isLoading;
   final String loadingLabel;
   final double height;
+  final EdgeInsetsGeometry padding;
+  final double fontSize;
 
   @override
   State<TactilePillButton> createState() => _TactilePillButtonState();
@@ -73,7 +77,7 @@ class _TactilePillButtonState extends State<TactilePillButton> {
               minWidth: 48,
             ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: widget.padding,
               child: Center(
                 child: AnimatedSwitcher(
                   duration: AppTokens.stateDuration,
@@ -100,7 +104,7 @@ class _TactilePillButtonState extends State<TactilePillButton> {
                                   widget.loadingLabel,
                                   maxLines: 1,
                                   style: AppTypography.heading(
-                                    fontSize: 15,
+                                    fontSize: widget.fontSize,
                                     fontWeight: FontWeight.w600,
                                     color: widget.foregroundColor,
                                   ),
@@ -116,7 +120,7 @@ class _TactilePillButtonState extends State<TactilePillButton> {
                             widget.label,
                             maxLines: 1,
                             style: AppTypography.heading(
-                              fontSize: 15,
+                              fontSize: widget.fontSize,
                               fontWeight: FontWeight.w600,
                               color: widget.foregroundColor,
                             ),

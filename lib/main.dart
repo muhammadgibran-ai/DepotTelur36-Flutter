@@ -30,10 +30,12 @@ class DepotTelur36App extends StatefulWidget {
   const DepotTelur36App({
     super.key,
     this.authViewModelOverride,
+    this.inventoryRepositoryOverride,
     this.splashDelay = const Duration(milliseconds: 1200),
   });
 
   final AuthViewModel? authViewModelOverride;
+  final InventoryRepository? inventoryRepositoryOverride;
   final Duration splashDelay;
 
   @override
@@ -86,6 +88,7 @@ class _DepotTelur36AppState extends State<DepotTelur36App> {
   @override
   Widget build(BuildContext context) {
     final overrideVm = widget.authViewModelOverride;
+    final overrideRepo = widget.inventoryRepositoryOverride;
 
     final app = MaterialApp(
       title: 'DepotTelur36',
@@ -95,6 +98,18 @@ class _DepotTelur36AppState extends State<DepotTelur36App> {
     );
 
     if (overrideVm != null) {
+      if (overrideRepo != null) {
+        return MultiProvider(
+          providers: [
+            ChangeNotifierProvider<SyncService>.value(
+              value: overrideRepo.syncService,
+            ),
+            Provider<InventoryRepository>.value(value: overrideRepo),
+            ChangeNotifierProvider<AuthViewModel>.value(value: overrideVm),
+          ],
+          child: app,
+        );
+      }
       return ChangeNotifierProvider<AuthViewModel>.value(
         value: overrideVm,
         child: app,
