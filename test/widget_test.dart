@@ -16,6 +16,7 @@ import 'package:depot_telur_36/screens/auth/sign_in_screen.dart';
 import 'package:depot_telur_36/screens/auth/sign_up_screen.dart';
 import 'package:depot_telur_36/screens/auth/welcome_screen.dart';
 import 'package:depot_telur_36/screens/home/role_home_shell_screen.dart';
+import 'package:depot_telur_36/screens/laporan/rekap_omzet_screen.dart';
 import 'package:depot_telur_36/screens/master/atur_harga_screen.dart';
 import 'package:depot_telur_36/screens/master/barang_form_screen.dart';
 import 'package:depot_telur_36/screens/master/master_data_tab_view.dart';
@@ -31,12 +32,14 @@ import 'package:depot_telur_36/services/auth_gateway.dart';
 import 'package:depot_telur_36/services/sync_service.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
+import 'package:depot_telur_36/viewmodels/rekap_omzet_view_model.dart';
 import 'package:depot_telur_36/viewmodels/transaction_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
 import 'package:depot_telur_36/widgets/dashboard_widgets.dart';
 import 'package:depot_telur_36/widgets/transaction_widgets.dart';
 import 'package:depot_telur_36/widgets/ux_motion_widgets.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:material_ui/material_ui.dart';
@@ -835,7 +838,9 @@ void main() {
       // Tap tab Omzet
       await tester.tap(find.text('Omzet'));
       await tester.pumpAndSettle();
-      expect(find.text('Ringkasan Omzet & Arus Kas'), findsOneWidget);
+      expect(find.text('Rekap Omzet'), findsOneWidget);
+      expect(find.text('Pemasukan 7 Hari Terakhir'), findsOneWidget);
+      expect(find.text('Ekspor'), findsOneWidget);
     });
 
     testWidgets('Operator tidak memiliki akses Omzet/Atur Harga dan Restock mengarah ke Faktur', (
@@ -1227,6 +1232,25 @@ void main() {
         tester,
         DetailFakturScreen(viewModel: txVm, faktur: txVm.fakturs.first),
       );
+
+      final rekapOwnerSession = AuthSession(
+        uid: 'rekap-audit-owner',
+        email: 'owner.rekap@depottelur36.com',
+        accountId: 'owner_rekap',
+        displayName: 'Owner Audit',
+        role: UserRole.owner,
+        petugasRemoteId: 'tx-audit-owner',
+        provider: AuthProviderType.emailPassword,
+        signedInAt: DateTime(2026, 2, 18),
+      );
+      final rekapVm = RekapOmzetViewModel.fromRepository(
+        session: rekapOwnerSession,
+        repository: inventoryRepository,
+        nowProvider: () => DateTime(2026, 2, 18),
+      );
+      addTearDown(rekapVm.dispose);
+      await tester.runAsync(() => rekapVm.loadData());
+      await auditScreen(tester, RekapOmzetScreen(viewModel: rekapVm));
     });
   });
 
@@ -2260,6 +2284,289 @@ void main() {
               .stokBarang,
           initialStock,
         );
+      },
+    );
+  });
+
+  group('Fungsi 5 - UI Rekap Omzet & Ekspor Laporan (Pendev 20)', () {
+    Future<void> flushAsyncUi(
+      WidgetTester tester, {
+      bool Function()? until,
+    }) async {
+      for (var i = 0; i < 10; i++) {
+        await tester.pump();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        if (until != null && until()) break;
+      }
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> scrollAndTapRekap(WidgetTester tester, Finder finder) async {
+      await tester.ensureVisible(finder);
+      await tester.pumpAndSettle();
+      await tester.tap(finder);
+    }
+
+    testWidgets(
+      'Alur lengkap Rekap Omzet: filter periode, klik grafik 7 hari, expand produk & ekspor CSV/Teks',
+      (tester) async {
+        final exportTemp = Directory.systemTemp.createTempSync(
+          'dt36_ui_export_',
+        );
+        addTearDown(() {
+          if (exportTemp.existsSync()) {
+            exportTemp.deleteSync(recursive: true);
+          }
+        });
+
+        final ownerSession = AuthSession(
+          uid: 'ui-rekap-owner',
+          email: 'owner.rekap@depottelur36.com',
+          accountId: 'owner_rekap_1',
+          displayName: 'Budi Owner',
+          role: UserRole.owner,
+          petugasRemoteId: 'rekap-owner-remote',
+          provider: AuthProviderType.emailPassword,
+          signedInAt: DateTime(2026, 2, 16),
+        );
+
+        await tester.runAsync(() async {
+          await inventoryRepository.savePetugas(
+            existingRemoteId: 'rekap-owner-remote',
+            namaPetugas: 'Budi Owner',
+            role: UserRole.owner,
+            pin: '9988',
+            email: 'owner.rekap@depottelur36.com',
+          );
+          final barangs = await inventoryRepository.getAllBarang();
+          final telur = barangs.firstWhere(
+            (b) => b.remoteId == 'seed-barang-telur-negeri-kg',
+          );
+          final minyak = barangs.firstWhere(
+            (b) => b.remoteId == 'seed-barang-minyak-1l',
+          );
+          final supplier = (await inventoryRepository.getAllSupplier()).first;
+          final customer = (await inventoryRepository.getAllCustomer()).first;
+          final owner = (await inventoryRepository.getAllPetugas()).firstWhere(
+            (p) => p.remoteId == 'rekap-owner-remote',
+          );
+
+          // Nota hari ini (16 Feb 2026) -> 2 Kg Telur (Rp 57.000)
+          await inventoryRepository.createNota(
+            tanggalNota: '2026-02-16',
+            customer: customer,
+            petugas: owner,
+            items: [(barang: telur, banyaknya: 2)],
+          );
+          // Nota 3 hari lalu (13 Feb 2026) -> 4 Pouch Minyak (Rp 70.000)
+          await inventoryRepository.createNota(
+            tanggalNota: '2026-02-13',
+            customer: customer,
+            petugas: owner,
+            items: [(barang: minyak, banyaknya: 4)],
+          );
+          // Faktur hari ini (16 Feb 2026) -> 10 Kg Telur (Rp 285.000)
+          await inventoryRepository.createFaktur(
+            noFaktur: 'FKT-OMZ-01',
+            tanggalFaktur: '2026-02-16',
+            supplier: supplier,
+            petugas: owner,
+            items: [(barang: telur, quantity: 10)],
+          );
+        });
+
+        final vm = RekapOmzetViewModel.fromRepository(
+          session: ownerSession,
+          repository: inventoryRepository,
+          exportDirectory: exportTemp,
+          nowProvider: () => DateTime(2026, 2, 16, 10, 0),
+        );
+        addTearDown(vm.dispose);
+        await tester.runAsync(() => vm.loadData());
+
+        await tester.pumpWidget(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider<SyncService>.value(value: syncService),
+              Provider<InventoryRepository>.value(value: inventoryRepository),
+              ChangeNotifierProvider<AuthViewModel>.value(value: viewModel),
+            ],
+            child: MaterialApp(
+              theme: AppTheme.light(),
+              home: RekapOmzetScreen(viewModel: vm),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Rekap Omzet'), findsOneWidget);
+        expect(find.text('Total Penjualan Nota'), findsOneWidget);
+        expect(find.text('Rp 57.000'), findsWidgets);
+        expect(find.text('2 Unit'), findsOneWidget);
+
+        // Pindah filter ke `7 Hari` -> menggabungkan 13 Feb & 16 Feb (57.000 + 70.000 = 127.000)
+        await tester.tap(find.byKey(const ValueKey('rekap_period_tujuhHari')));
+        await tester.pumpAndSettle();
+        expect(find.text('Rp 127.000'), findsOneWidget);
+        expect(find.text('6 Unit'), findsOneWidget);
+
+        // Ketuk batang grafik indeks 3 (13 Feb 2026 = Rp 70.000) -> callout hari aktif berubah
+        await scrollAndTapRekap(
+          tester,
+          find.byKey(const ValueKey('rekap_chart_bar_3')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Rp 70.000 (1 Nota)'), findsOneWidget);
+
+        // Ketuk produk untuk membuka detail porsi omzet (SoftAnimatedReveal)
+        await scrollAndTapRekap(
+          tester,
+          find.text('Minyak Goreng Kemasan 1 Liter'),
+        );
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Porsi omzet:'), findsOneWidget);
+
+        // Buka sheet Ekspor -> salin laporan -> ubah ke Teks -> simpan file nyata ke disk
+        await scrollAndTapRekap(
+          tester,
+          find.byKey(const ValueKey('rekap_omzet_export_btn')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Ekspor Laporan Omzet'), findsOneWidget);
+
+        String? copiedClipboardText;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copiedClipboardText =
+                  (call.arguments as Map<dynamic, dynamic>)['text'] as String?;
+            }
+            return null;
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            null,
+          ),
+        );
+
+        await scrollAndTapRekap(
+          tester,
+          find.byKey(const ValueKey('rekap_export_copy_btn')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Tersalin!'), findsOneWidget);
+        expect(copiedClipboardText, contains('LAPORAN REKAP OMZET DEPOTELUR36'));
+        expect(copiedClipboardText, contains('Telur Ayam Negeri'));
+
+        await scrollAndTapRekap(
+          tester,
+          find.byKey(const ValueKey('rekap_export_format_ringkasanTeks')),
+        );
+        await tester.pumpAndSettle();
+
+        await scrollAndTapRekap(
+          tester,
+          find.byKey(const ValueKey('rekap_export_save_btn')),
+        );
+        await flushAsyncUi(
+          tester,
+          until: () => vm.lastExportResult?.filePath != null,
+        );
+        final savedPath = vm.lastExportResult?.filePath;
+        expect(savedPath, isNotNull);
+        expect(File(savedPath!).existsSync(), isTrue);
+        await tester.pump(const Duration(seconds: 3));
+      },
+    );
+
+    testWidgets(
+      'RBAC Operator ditolak & viewport sempit 320x568 skala 1.4x Reduce Motion bebas overflow',
+      (tester) async {
+        tester.view.physicalSize = const Size(320, 568);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final opSession = AuthSession(
+          uid: 'ui-rekap-op',
+          email: 'op.rekap@depottelur36.com',
+          accountId: 'op_rekap',
+          displayName: 'Kasir Uji',
+          role: UserRole.petugas,
+          petugasRemoteId: 'op-rekap-remote',
+          provider: AuthProviderType.emailPassword,
+          signedInAt: DateTime(2026, 2, 16),
+        );
+        final opVm = RekapOmzetViewModel.fromRepository(
+          session: opSession,
+          repository: inventoryRepository,
+        );
+        addTearDown(opVm.dispose);
+        await tester.runAsync(() => opVm.loadData());
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.light(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                disableAnimations: true,
+                textScaler: const TextScaler.linear(1.4),
+              ),
+              child: child!,
+            ),
+            home: RekapOmzetScreen(viewModel: opVm),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Akses Ditolak (Khusus Owner)'), findsOneWidget);
+        expect(find.byKey(const ValueKey('rekap_omzet_export_btn')), findsNothing);
+        expect(tester.takeException(), isNull);
+
+        // Sekarang uji akun Owner pada 320x568 skala 1.4x beserta dialog Ekspor
+        final ownerSession = AuthSession(
+          uid: 'ui-rekap-owner-compact',
+          email: 'owner.compact@depottelur36.com',
+          accountId: 'owner_compact',
+          displayName: 'Owner Uji',
+          role: UserRole.owner,
+          petugasRemoteId: 'owner-compact-remote',
+          provider: AuthProviderType.emailPassword,
+          signedInAt: DateTime(2026, 2, 16),
+        );
+        final ownerVm = RekapOmzetViewModel.fromRepository(
+          session: ownerSession,
+          repository: inventoryRepository,
+          nowProvider: () => DateTime(2026, 2, 16),
+        );
+        addTearDown(ownerVm.dispose);
+        await tester.runAsync(() => ownerVm.loadData());
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.light(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                disableAnimations: true,
+                textScaler: const TextScaler.linear(1.4),
+              ),
+              child: child!,
+            ),
+            home: RekapOmzetScreen(viewModel: ownerVm),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Rekap Omzet'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+
+        await tester.tap(find.byKey(const ValueKey('rekap_omzet_export_btn')));
+        await tester.pumpAndSettle();
+        expect(find.text('Ekspor Laporan Omzet'), findsOneWidget);
+        expect(tester.takeException(), isNull);
       },
     );
   });

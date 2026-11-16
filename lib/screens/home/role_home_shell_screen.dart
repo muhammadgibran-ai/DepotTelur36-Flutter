@@ -10,6 +10,7 @@ import 'package:depot_telur_36/models/barang.dart';
 import 'package:depot_telur_36/models/dashboard_models.dart';
 import 'package:depot_telur_36/repositories/inventory_repository.dart';
 import 'package:depot_telur_36/screens/auth/welcome_screen.dart';
+import 'package:depot_telur_36/screens/laporan/rekap_omzet_screen.dart';
 import 'package:depot_telur_36/screens/master/atur_harga_screen.dart';
 import 'package:depot_telur_36/screens/master/barang_form_screen.dart';
 import 'package:depot_telur_36/screens/master/master_data_tab_view.dart';
@@ -20,6 +21,7 @@ import 'package:depot_telur_36/screens/transaksi/riwayat_nota_screen.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/viewmodels/dashboard_view_model.dart';
 import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
+import 'package:depot_telur_36/viewmodels/rekap_omzet_view_model.dart';
 import 'package:depot_telur_36/viewmodels/transaction_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
@@ -59,12 +61,14 @@ class RoleHomeShellScreen extends StatefulWidget {
     this.viewModelOverride,
     this.masterViewModelOverride,
     this.transactionViewModelOverride,
+    this.rekapViewModelOverride,
   });
 
   final AuthSession initialSession;
   final DashboardViewModel? viewModelOverride;
   final MasterCrudViewModel? masterViewModelOverride;
   final TransactionCrudViewModel? transactionViewModelOverride;
+  final RekapOmzetViewModel? rekapViewModelOverride;
 
   @override
   State<RoleHomeShellScreen> createState() => _RoleHomeShellScreenState();
@@ -74,6 +78,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
   DashboardViewModel? _ownedViewModel;
   MasterCrudViewModel? _ownedMasterViewModel;
   TransactionCrudViewModel? _ownedTransactionViewModel;
+  RekapOmzetViewModel? _ownedRekapViewModel;
   DashboardViewModel? _bridgeListenedVm;
   DashboardViewModel? _tabTrackedVm;
   DashboardTabId? _lastTrackedTab;
@@ -86,6 +91,8 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
       widget.masterViewModelOverride ?? _ownedMasterViewModel!;
   TransactionCrudViewModel get _transactionVm =>
       widget.transactionViewModelOverride ?? _ownedTransactionViewModel!;
+  RekapOmzetViewModel get _rekapVm =>
+      widget.rekapViewModelOverride ?? _ownedRekapViewModel!;
 
   @override
   void initState() {
@@ -140,6 +147,22 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
         unawaited(_ownedTransactionViewModel!.loadData(silent: true));
       }
     }
+    if (widget.rekapViewModelOverride == null) {
+      if (repo != null) {
+        _ownedRekapViewModel = RekapOmzetViewModel.fromRepository(
+          session: widget.initialSession,
+          repository: repo,
+        );
+        unawaited(_ownedRekapViewModel!.loadData());
+      } else {
+        _ownedRekapViewModel = RekapOmzetViewModel(
+          session: widget.initialSession,
+          dataSource: ReadOnlyTransactionBridgeDataSource(_vm),
+        );
+        _bridgeListenedVm ??= _vm..addListener(_onBridgeDashboardChanged);
+        unawaited(_ownedRekapViewModel!.loadData(silent: true));
+      }
+    }
     _attachTabTracker(_vm);
   }
 
@@ -174,6 +197,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     if (txVm != null && mounted) {
       unawaited(txVm.loadData(silent: true));
     }
+    final rekapVm = _ownedRekapViewModel;
+    if (rekapVm != null && mounted) {
+      unawaited(rekapVm.loadData(silent: true));
+    }
   }
 
   void _onSearchFocusChanged() {
@@ -194,6 +221,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     if (_ownedTransactionViewModel != null &&
         oldWidget.initialSession != widget.initialSession) {
       _ownedTransactionViewModel!.updateSession(widget.initialSession);
+    }
+    if (_ownedRekapViewModel != null &&
+        oldWidget.initialSession != widget.initialSession) {
+      _ownedRekapViewModel!.updateSession(widget.initialSession);
     }
     if (widget.viewModelOverride != null &&
         widget.viewModelOverride != oldWidget.viewModelOverride) {
@@ -222,6 +253,16 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
           );
           unawaited(_ownedTransactionViewModel!.loadData(silent: true));
         }
+        if (_ownedRekapViewModel != null) {
+          _ownedRekapViewModel!.dispose();
+          _ownedRekapViewModel = RekapOmzetViewModel(
+            session: widget.initialSession,
+            dataSource: ReadOnlyTransactionBridgeDataSource(
+              widget.viewModelOverride!,
+            ),
+          );
+          unawaited(_ownedRekapViewModel!.loadData(silent: true));
+        }
         _bridgeListenedVm = widget.viewModelOverride!
           ..addListener(_onBridgeDashboardChanged);
       }
@@ -237,6 +278,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
       _ownedViewModel?.updateSession(authSession);
       _ownedMasterViewModel?.updateSession(authSession);
       _ownedTransactionViewModel?.updateSession(authSession);
+      _ownedRekapViewModel?.updateSession(authSession);
     }
   }
 
@@ -247,6 +289,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     _searchFocusNode.removeListener(_onSearchFocusChanged);
     _searchFocusNode.dispose();
     _searchController.dispose();
+    _ownedRekapViewModel?.dispose();
     _ownedTransactionViewModel?.dispose();
     _ownedMasterViewModel?.dispose();
     _ownedViewModel?.dispose();
@@ -488,7 +531,15 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
                     embedded: true,
                     onTransactionChanged: _vm.loadDashboardData,
                   ),
-                DashboardTabId.beranda || DashboardTabId.omzet => Column(
+                DashboardTabId.omzet => RekapOmzetView(
+                    key: const ValueKey('rekap_tab_omzet'),
+                    viewModel: _rekapVm,
+                    embedded: true,
+                    onBackPressed: () =>
+                        _handleSelectTab(DashboardTabId.beranda),
+                    onRefreshRequested: _vm.loadDashboardData,
+                  ),
+                DashboardTabId.beranda => Column(
                     key: const ValueKey('dashboard_main_shell'),
                     children: [
                       _DashboardHeader(
@@ -579,7 +630,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
   Widget _buildTabScrollView(BuildContext context, AuthSession session) {
     final tabChildren = switch (_vm.activeTab) {
       DashboardTabId.beranda => _buildBerandaContent(context, session),
-      DashboardTabId.omzet => _buildOwnerOmzetContent(),
+      DashboardTabId.omzet ||
       DashboardTabId.nota ||
       DashboardTabId.master ||
       DashboardTabId.kasir ||
@@ -824,32 +875,6 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
         const SizedBox(height: 12),
         _SecondarySearchMatchesCard(vm: _vm),
       ],
-    ];
-  }
-
-  List<Widget> _buildOwnerOmzetContent() {
-    final m = _vm.metrics;
-    return [
-      const _ModuleStagingBanner(
-        badge: 'Khusus Owner · Tahap Berikutnya',
-        title: 'Ringkasan Omzet & Arus Kas',
-        subtitle:
-            'Data dihitung langsung dari transaksi Nota & Faktur lokal SQLite.',
-      ),
-      const SizedBox(height: 14),
-      _MetricTileRow(
-        leftTitle: 'Total Omzet Nota',
-        leftValue: formatRupiah(m.totalNotaOmzet),
-        rightTitle: 'Jumlah Nota',
-        rightValue: '${m.totalNotaCount} Transaksi',
-      ),
-      const SizedBox(height: 10),
-      _MetricTileRow(
-        leftTitle: 'Belanja Faktur',
-        leftValue: formatRupiah(m.totalFakturBelanja),
-        rightTitle: 'Stok Menipis',
-        rightValue: '${m.lowStockCount} Barang',
-      ),
     ];
   }
 
@@ -1496,143 +1521,6 @@ class _ErrorRetryCard extends StatelessWidget {
             child: const Text(
               'Muat Ulang',
               style: TextStyle(fontWeight: FontWeight.w800),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ModuleStagingBanner extends StatelessWidget {
-  const _ModuleStagingBanner({
-    required this.badge,
-    required this.title,
-    required this.subtitle,
-  });
-
-  final String badge;
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.textPrimary,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFF262626),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              badge,
-              style: AppTypography.body(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: AppColors.yolk,
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            title,
-            style: AppTypography.heading(
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-              color: Colors.white,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: AppTypography.body(
-              fontSize: 12.5,
-              color: const Color(0xFFD1D5DB),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MetricTileRow extends StatelessWidget {
-  const _MetricTileRow({
-    required this.leftTitle,
-    required this.leftValue,
-    required this.rightTitle,
-    required this.rightValue,
-  });
-
-  final String leftTitle;
-  final String leftValue;
-  final String rightTitle;
-  final String rightValue;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: _MetricTile(title: leftTitle, value: leftValue),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _MetricTile(title: rightTitle, value: rightValue),
-        ),
-      ],
-    );
-  }
-}
-
-class _MetricTile extends StatelessWidget {
-  const _MetricTile({
-    required this.title,
-    required this.value,
-  });
-
-  final String title;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.borderSubtle),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppTypography.body(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppTypography.heading(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
             ),
           ),
         ],

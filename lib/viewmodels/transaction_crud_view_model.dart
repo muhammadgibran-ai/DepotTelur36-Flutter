@@ -545,7 +545,7 @@ class TransactionCrudViewModel extends ChangeNotifier {
   }
 
   static String formatDisplayDate(String isoDate, {bool short = false}) {
-    final parsed = _parseIsoDate(isoDate);
+    final parsed = parseIsoDate(isoDate);
     if (parsed == null) return isoDate;
     const shortMonths = [
       'Jan',
@@ -583,7 +583,7 @@ class TransactionCrudViewModel extends ChangeNotifier {
         : '${parsed.day} $monthLabel ${parsed.year}';
   }
 
-  static DateTime? _parseIsoDate(String raw) {
+  static DateTime? parseIsoDate(String raw) {
     final parts = raw.trim().split('-');
     if (parts.length != 3) return null;
     final y = int.tryParse(parts[0]);
@@ -596,7 +596,7 @@ class TransactionCrudViewModel extends ChangeNotifier {
   }
 
   static bool _isIsoDateOnOrAfter(String isoDate, DateTime minDate) {
-    final parsed = _parseIsoDate(isoDate);
+    final parsed = parseIsoDate(isoDate);
     if (parsed == null) return false;
     return !parsed.isBefore(minDate);
   }

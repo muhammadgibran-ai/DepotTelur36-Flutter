@@ -22,7 +22,10 @@ class MasterAmberHeader extends StatelessWidget {
     required this.subtitle,
     this.showBackButton = false,
     this.onBack,
+    this.backKey,
     this.actionLabel,
+    this.actionIcon,
+    this.actionKey,
     this.onAction,
     this.badgeLabel,
   });
@@ -31,7 +34,10 @@ class MasterAmberHeader extends StatelessWidget {
   final String subtitle;
   final bool showBackButton;
   final VoidCallback? onBack;
+  final Key? backKey;
   final String? actionLabel;
+  final IconData? actionIcon;
+  final Key? actionKey;
   final VoidCallback? onAction;
   final String? badgeLabel;
 
@@ -74,7 +80,7 @@ class MasterAmberHeader extends StatelessWidget {
                       color: AppColors.surface,
                       shape: const CircleBorder(),
                       child: InkWell(
-                        key: const ValueKey('master_header_back_button'),
+                        key: backKey ?? const ValueKey('master_header_back_button'),
                         customBorder: const CircleBorder(),
                         onTap: () {
                           HapticFeedback.selectionClick();
@@ -172,7 +178,7 @@ class MasterAmberHeader extends StatelessWidget {
                       color: AppColors.ink,
                       borderRadius: BorderRadius.circular(22),
                       child: InkWell(
-                        key: const ValueKey('master_header_add_button'),
+                        key: actionKey ?? const ValueKey('master_header_add_button'),
                         borderRadius: BorderRadius.circular(22),
                         onTap: () {
                           HapticFeedback.selectionClick();
@@ -186,14 +192,27 @@ class MasterAmberHeader extends StatelessWidget {
                           child: Center(
                             child: AnimatedSwitcher(
                               duration: headerDuration,
-                              child: Text(
-                                actionLabel!,
-                                key: ValueKey(actionLabel),
-                                style: AppTypography.body(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.surface,
-                                ),
+                              child: Row(
+                                key: ValueKey('${actionIcon?.codePoint}_$actionLabel'),
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (actionIcon != null) ...[
+                                    Icon(
+                                      actionIcon,
+                                      size: 16,
+                                      color: AppColors.yolk,
+                                    ),
+                                    const SizedBox(width: 6),
+                                  ],
+                                  Text(
+                                    actionLabel!,
+                                    style: AppTypography.body(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.surface,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),

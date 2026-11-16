@@ -221,7 +221,7 @@ const List<DashboardShortcutSpec> _ownerShortcuts = [
     id: DashboardShortcutId.aturHarga,
     label: 'Atur Harga',
     description:
-        'Kelola harga jual eceran & grosir barang (khusus Owner). Modul editor harga penuh hadir pada tahap berikutnya.',
+        'Kelola dan perbarui harga jual satuan barang (khusus Owner) secara batch.',
     ownerOnly: true,
     targetTab: DashboardTabId.master,
   ),
@@ -229,7 +229,7 @@ const List<DashboardShortcutSpec> _ownerShortcuts = [
     id: DashboardShortcutId.riwayatFaktur,
     label: 'Riwayat Faktur',
     description:
-        'Audit riwayat faktur barang masuk dari supplier. Modul detail faktur penuh hadir pada tahap berikutnya.',
+        'Audit riwayat faktur barang masuk dari supplier beserta rincian stok.',
     ownerOnly: false,
   ),
   DashboardShortcutSpec(
@@ -244,7 +244,7 @@ const List<DashboardShortcutSpec> _ownerShortcuts = [
     id: DashboardShortcutId.akunPetugas,
     label: 'Akun Petugas',
     description:
-        'Pantau akun Kasir/Gudang dan peran aktif (khusus Owner). Manajemen akun penuh hadir pada tahap berikutnya.',
+        'Kelola akun Kasir/Gudang, PIN akses, dan peran RBAC (khusus Owner).',
     ownerOnly: true,
     targetTab: DashboardTabId.master,
   ),
@@ -255,7 +255,7 @@ const List<DashboardShortcutSpec> _operatorShortcuts = [
     id: DashboardShortcutId.riwayatNota,
     label: 'Riwayat Nota',
     description:
-        'Pantau nota penjualan kasir terkini. Pencatatan kasir penuh hadir pada tahap berikutnya.',
+        'Pantau nota penjualan kasir terkini serta ubah atau audit transaksi.',
     ownerOnly: false,
     targetTab: DashboardTabId.kasir,
   ),
