@@ -667,7 +667,7 @@ class RestockEmptyCriticalCard extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   subtitleOverride ??
-                      'Seluruh barang saat ini berada di atas batas minimum $threshold unit.',
+                      'Seluruh barang saat ini memiliki stok di atas $threshold unit.',
                   style: AppTypography.body(
                     fontSize: 12,
                     color: AppColors.textSecondary,

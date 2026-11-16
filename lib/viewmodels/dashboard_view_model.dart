@@ -620,7 +620,7 @@ class DashboardViewModel extends ChangeNotifier {
             id: id,
             title: 'Stok Menipis · ${item.namaBarang}',
             message:
-                'Sisa ${item.stokBarang} ${item.satuan} (batas minimum $kLowStockThreshold).',
+                'Sisa ${item.stokBarang} ${item.satuan}, perlu segera restock.',
             severity: NotificationSeverity.warning,
             createdAt: item.updatedAt,
             isRead: _readNotificationIds.contains(id),
@@ -636,8 +636,7 @@ class DashboardViewModel extends ChangeNotifier {
           AppNotificationItem(
             id: id,
             title: 'Pantauan Stok · ${item.namaBarang}',
-            message:
-                'Sisa ${item.stokBarang} ${item.satuan}, mendekati batas minimum.',
+            message: 'Sisa ${item.stokBarang} ${item.satuan}, perlu dipantau.',
             severity: NotificationSeverity.info,
             createdAt: item.updatedAt,
             isRead: _readNotificationIds.contains(id),

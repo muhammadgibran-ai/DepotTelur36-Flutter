@@ -865,6 +865,7 @@ void main() {
       expect(find.text('Omzet'), findsNothing);
       expect(find.text('Atur Harga'), findsNothing);
       expect(find.text('Akun Petugas'), findsNothing);
+      expect(find.textContaining('Batas minimum'), findsNothing);
 
       // Tap Restock pada LowStockAlertCard -> pindah ke Faktur + SnackBar
       await tester.tap(find.text('Restock').first);
@@ -1005,7 +1006,7 @@ void main() {
                 AppNotificationItem(
                   id: 'stock-low:1:8',
                   title: 'Stok Menipis · Minyak Goreng 1L',
-                  message: 'Sisa 8 Pouch (batas minimum 10).',
+                  message: 'Sisa 8 Pouch, perlu segera restock.',
                   severity: NotificationSeverity.warning,
                   createdAt: DateTime(2026, 2, 16),
                   isRead: false,

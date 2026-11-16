@@ -266,7 +266,7 @@ class LowStockAlertCard extends StatelessWidget {
     final prefix = isEmpty ? 'Stok Habis' : 'Stok Menipis';
     final subtext = isEmpty
         ? 'Sisa ${barang.stokBarang} ${barang.satuan} · Segera restock'
-        : 'Sisa ${barang.stokBarang} ${barang.satuan} (Batas minimum $kLowStockThreshold)';
+        : 'Sisa ${barang.stokBarang} ${barang.satuan}';
 
     return Material(
       color: AppColors.dangerBg,
