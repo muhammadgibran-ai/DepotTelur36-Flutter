@@ -102,26 +102,33 @@ class BarangThumbnail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final assetPath = DashboardAssets.assetPathForBarang(barang);
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: AppColors.borderSubtle),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: assetPath == null
-          ? _fallbackIcon()
-          : Image.asset(
-              assetPath,
-              width: size,
-              height: size,
-              fit: BoxFit.cover,
-              excludeFromSemantics: true,
-              errorBuilder: (context, error, stackTrace) => _fallbackIcon(),
-            ),
+    return ValueListenableBuilder<Map<String, String>>(
+      valueListenable: BarangPhotoPresets.customAssetsListenable,
+      builder: (context, overrides, _) {
+        final assetPath =
+            overrides[barang.remoteId] ??
+            DashboardAssets.assetPathForBarang(barang);
+        return Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(color: AppColors.borderSubtle),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: assetPath == null
+              ? _fallbackIcon()
+              : Image.asset(
+                  assetPath,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                  excludeFromSemantics: true,
+                  errorBuilder: (context, error, stackTrace) => _fallbackIcon(),
+                ),
+        );
+      },
     );
   }
 
@@ -134,5 +141,43 @@ class BarangThumbnail extends StatelessWidget {
         color: AppColors.yolkPressed,
       ),
     );
+  }
+}
+
+/// Pilihan preset foto lokal untuk barang tanpa mengubah skema kolom PDM SQLite.
+class BarangPhotoPresets {
+  BarangPhotoPresets._();
+
+  static const List<({String label, String assetPath})> options = [
+    (label: 'Telur Negeri', assetPath: DashboardAssets.thumbTelurNegeri),
+    (label: 'Telur 1 Tray', assetPath: DashboardAssets.thumbTelurTray),
+    (label: 'Telur Kampung', assetPath: DashboardAssets.thumbTelurKampung),
+    (label: 'Telur Bebek', assetPath: DashboardAssets.thumbTelurBebek),
+    (label: 'Beras', assetPath: DashboardAssets.thumbBeras),
+    (label: 'Minyak Goreng', assetPath: DashboardAssets.thumbMinyak),
+  ];
+
+  static final ValueNotifier<Map<String, String>> customAssetsListenable =
+      ValueNotifier<Map<String, String>>(<String, String>{});
+
+  static String? resolveAssetPath(Barang barang) {
+    return customAssetsListenable.value[barang.remoteId] ??
+        DashboardAssets.assetPathForBarang(barang);
+  }
+
+  static void setAssetForRemoteId(String remoteId, String? assetPath) {
+    final trimmedId = remoteId.trim();
+    if (trimmedId.isEmpty) return;
+    final next = Map<String, String>.from(customAssetsListenable.value);
+    if (assetPath == null || assetPath.trim().isEmpty) {
+      next.remove(trimmedId);
+    } else {
+      next[trimmedId] = assetPath;
+    }
+    customAssetsListenable.value = Map.unmodifiable(next);
+  }
+
+  static void clearAll() {
+    customAssetsListenable.value = <String, String>{};
   }
 }

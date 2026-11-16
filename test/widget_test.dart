@@ -16,11 +16,19 @@ import 'package:depot_telur_36/screens/auth/sign_in_screen.dart';
 import 'package:depot_telur_36/screens/auth/sign_up_screen.dart';
 import 'package:depot_telur_36/screens/auth/welcome_screen.dart';
 import 'package:depot_telur_36/screens/home/role_home_shell_screen.dart';
+import 'package:depot_telur_36/screens/master/atur_harga_screen.dart';
+import 'package:depot_telur_36/screens/master/barang_form_screen.dart';
+import 'package:depot_telur_36/screens/master/master_data_tab_view.dart';
+import 'package:depot_telur_36/screens/master/petugas_form_screen.dart';
+import 'package:depot_telur_36/screens/master/supplier_form_screen.dart';
 import 'package:depot_telur_36/services/auth_gateway.dart';
 import 'package:depot_telur_36/services/sync_service.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
+import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
+import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
 import 'package:depot_telur_36/widgets/dashboard_widgets.dart';
+import 'package:depot_telur_36/widgets/ux_motion_widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:material_ui/material_ui.dart';
@@ -814,7 +822,7 @@ void main() {
       // Tap Lihat Semua -> pindah ke tab Master
       await tester.tap(find.text('Lihat Semua'));
       await tester.pumpAndSettle();
-      expect(find.text('Katalog Barang & Master Entitas'), findsOneWidget);
+      expect(find.text('Master Data Toko'), findsOneWidget);
 
       // Tap tab Omzet
       await tester.tap(find.text('Omzet'));
@@ -941,13 +949,13 @@ void main() {
 
       await tester.tap(find.text('Master'));
       await tester.pumpAndSettle();
-      expect(find.text('Katalog Barang & Master Entitas'), findsOneWidget);
+      expect(find.text('Master Data Toko'), findsOneWidget);
 
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       expect(find.byType(RoleHomeShellScreen), findsOneWidget);
       expect(find.text('Fungsi Manajerial'), findsOneWidget);
-      expect(find.text('Katalog Barang & Master Entitas'), findsNothing);
+      expect(find.text('Master Data Toko'), findsNothing);
 
       final searchField = find.byType(TextField);
       final fieldWidget = tester.widget<TextField>(searchField);
@@ -1082,5 +1090,807 @@ void main() {
         ),
       );
     });
+
+    Future<MasterCrudViewModel> createMasterVm(
+      WidgetTester tester, {
+      required bool owner,
+    }) async {
+      final session = AuthSession(
+        uid: owner ? 'audit-owner' : 'audit-kasir',
+        email: owner ? 'owner@depottelur36.com' : 'kasir@depottelur36.com',
+        accountId: owner ? 'owner01' : 'kasir01',
+        displayName: owner ? 'Owner Audit' : 'Kasir Audit',
+        role: owner ? UserRole.owner : UserRole.petugas,
+        petugasRemoteId: owner ? 'audit-owner-remote' : 'audit-kasir-remote',
+        provider: AuthProviderType.emailPassword,
+        signedInAt: DateTime(2026, 2, 16),
+      );
+      final vm = MasterCrudViewModel.fromRepository(
+        session: session,
+        repository: inventoryRepository,
+      );
+      addTearDown(vm.dispose);
+      await tester.runAsync(() async {
+        await inventoryRepository.savePetugas(
+          existingRemoteId: 'audit-owner-remote',
+          namaPetugas: 'Owner Audit',
+          role: UserRole.owner,
+          pin: '9999',
+          email: 'owner@depottelur36.com',
+        );
+        await vm.loadData();
+      });
+      return vm;
+    }
+
+    testWidgets('MasterDataTabView, CRUD forms & AturHargaScreen memenuhi standar aksesibilitas', (
+      tester,
+    ) async {
+      final ownerVm = await createMasterVm(tester, owner: true);
+
+      await auditScreen(
+        tester,
+        Scaffold(body: MasterDataTabView(viewModel: ownerVm)),
+      );
+      await auditScreen(
+        tester,
+        BarangFormScreen(
+          viewModel: ownerVm,
+          initialBarang: ownerVm.allBarang.first,
+        ),
+      );
+      await auditScreen(
+        tester,
+        SupplierFormScreen(
+          viewModel: ownerVm,
+          initialSupplier: ownerVm.allSuppliers.first,
+        ),
+      );
+      await auditScreen(
+        tester,
+        PetugasFormScreen(
+          viewModel: ownerVm,
+          initialPetugas: ownerVm.allPetugas.first,
+        ),
+      );
+      await auditScreen(
+        tester,
+        AturHargaScreen(viewModel: ownerVm),
+      );
+    });
+  });
+
+  group('Fungsi 3 - UI Master Data CRUD, Atur Harga & RBAC', () {
+    AuthSession ownerSession() => AuthSession(
+      uid: 'ui-owner',
+      email: 'owner@depottelur36.com',
+      accountId: 'owner01',
+      displayName: 'Budi Owner',
+      role: UserRole.owner,
+      petugasRemoteId: 'ui-owner-remote',
+      provider: AuthProviderType.emailPassword,
+      signedInAt: DateTime(2026, 2, 16),
+    );
+
+    AuthSession operatorSession() => AuthSession(
+      uid: 'ui-kasir',
+      email: 'kasir@depottelur36.com',
+      accountId: 'kasir01',
+      displayName: 'Siti Kasir',
+      role: UserRole.petugas,
+      petugasRemoteId: 'ui-kasir-remote',
+      provider: AuthProviderType.emailPassword,
+      signedInAt: DateTime(2026, 2, 16),
+    );
+
+    Future<void> scrollMasterToTop(WidgetTester tester) async {
+      final verticalScrollable = find.descendant(
+        of: find.byType(RefreshIndicator),
+        matching: find.byWidgetPredicate(
+          (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+        ),
+      );
+      if (verticalScrollable.evaluate().isNotEmpty) {
+        tester
+            .state<ScrollableState>(verticalScrollable.first)
+            .position
+            .jumpTo(0);
+        await tester.pumpAndSettle();
+      }
+    }
+
+    Future<void> tapVisible(WidgetTester tester, Finder finder) async {
+      await tester.ensureVisible(finder);
+      await tester.pumpAndSettle();
+      await tester.tap(finder);
+    }
+
+    Future<void> flushDb(WidgetTester tester) async {
+      for (var i = 0; i < 6; i++) {
+        await tester.pump();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+      }
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> pumpMasterShell(
+      WidgetTester tester,
+      AuthSession session, {
+      Size size = const Size(390, 844),
+      double textScale = 1.0,
+      bool disableAnimations = false,
+    }) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        BarangPhotoPresets.clearAll();
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<SyncService>.value(value: syncService),
+            Provider<InventoryRepository>.value(value: inventoryRepository),
+            ChangeNotifierProvider<AuthViewModel>.value(value: viewModel),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            builder: (context, child) {
+              return MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  disableAnimations: disableAnimations,
+                  textScaler: TextScaler.linear(textScale),
+                ),
+                child: child!,
+              );
+            },
+            home: RoleHomeShellScreen(initialSession: session),
+          ),
+        ),
+      );
+      await flushDb(tester);
+    }
+
+    testWidgets('Owner dapat melakukan CRUD Barang, Supplier, Pelanggan & Petugas end-to-end dengan SQLite nyata', (
+      tester,
+    ) async {
+      await tester.runAsync(() async {
+        await inventoryRepository.savePetugas(
+          existingRemoteId: 'ui-owner-remote',
+          namaPetugas: 'Budi Owner',
+          role: UserRole.owner,
+          pin: '9999',
+          email: 'owner@depottelur36.com',
+        );
+      });
+
+      await pumpMasterShell(tester, ownerSession());
+
+      // Buka tab Master -> kategori Barang
+      await tester.tap(find.text('Master'));
+      await tester.pumpAndSettle();
+      expect(find.text('Master Data Toko'), findsOneWidget);
+      expect(find.text('Petugas'), findsOneWidget);
+
+      // Tambah Barang: validasi salah input dulu lalu input valid + quick unit + preset foto
+      await tester.tap(find.byKey(const ValueKey('master_header_add_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Tambah Barang Baru'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('crud_footer_save_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Nama barang minimal 2 karakter.'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('barang_nama_field')),
+        'Telur Puyuh Organik',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('barang_stok_field')),
+        '35',
+      );
+      await tapVisible(tester, find.byKey(const ValueKey('unit_chip_Tray')));
+      await tester.enterText(
+        find.byKey(const ValueKey('barang_harga_field')),
+        '32000',
+      );
+      await tapVisible(
+        tester,
+        find.byKey(const ValueKey('barang_toggle_photo_picker')),
+      );
+      await tester.pumpAndSettle();
+      await tapVisible(tester, find.text('Telur Bebek'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('crud_footer_save_button')));
+      await flushDb(tester);
+
+      expect(find.text('Telur Puyuh Organik'), findsOneWidget);
+
+      // Edit Barang -> Hapus Barang dengan DeleteConfirmCard
+      final puyuhItem = (await tester.runAsync(
+        () => inventoryRepository.getAllBarang(),
+      ))!.firstWhere((b) => b.namaBarang == 'Telur Puyuh Organik');
+      await tapVisible(
+        tester,
+        find.byKey(ValueKey('edit_barang_${puyuhItem.remoteId}')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Edit Data Barang'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('crud_footer_delete_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Konfirmasi Hapus Barang?'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey('delete_confirm_submit_button')),
+      );
+      await flushDb(tester);
+      expect(find.text('Telur Puyuh Organik'), findsNothing);
+
+      // Kategori Supplier: validasi HP salah lalu create & delete
+      await scrollMasterToTop(tester);
+      await tapVisible(
+        tester,
+        find.byKey(const ValueKey('master_category_tab_supplier')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('master_header_add_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Tambah Supplier Baru'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('supplier_nama_field')),
+        'Peternakan Subur Makmur',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('supplier_telp_field')),
+        '123',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('supplier_alamat_field')),
+        'Jl. Raya Bekasi No. 45',
+      );
+      await tester.tap(find.byKey(const ValueKey('crud_footer_save_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Nomor telepon harus 8-15 digit angka.'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('supplier_telp_field')),
+        '0812-9988-7766',
+      );
+      await tester.tap(find.byKey(const ValueKey('crud_footer_save_button')));
+      await flushDb(tester);
+      expect(find.text('Peternakan Subur Makmur'), findsOneWidget);
+
+      // Kategori Pelanggan: inline QuickCustomerForm Create -> Edit -> Delete
+      await scrollMasterToTop(tester);
+      await tapVisible(
+        tester,
+        find.byKey(const ValueKey('master_category_tab_pelanggan')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Tambah Pelanggan Baru'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('customer_quick_nama_field')),
+        'Warung Bu Dewi',
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('customer_quick_save_button')),
+      );
+      await flushDb(tester);
+      expect(find.text('Warung Bu Dewi'), findsOneWidget);
+
+      final dewi = (await tester.runAsync(
+        () => inventoryRepository.getAllCustomer(),
+      ))!.firstWhere((c) => c.namaCustomer == 'Warung Bu Dewi');
+      await tapVisible(
+        tester,
+        find.byKey(ValueKey('edit_customer_${dewi.remoteId}')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Ubah Nama Pelanggan'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('customer_quick_nama_field')),
+        'Toko Bu Dewi Raya',
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('customer_quick_save_button')),
+      );
+      await flushDb(tester);
+      expect(find.text('Toko Bu Dewi Raya'), findsOneWidget);
+
+      // Kategori Petugas: PIN visibility toggle + Create
+      await scrollMasterToTop(tester);
+      await tapVisible(
+        tester,
+        find.byKey(const ValueKey('master_category_tab_petugas')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('master_header_add_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Tambah Petugas Baru'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('petugas_nama_field')),
+        'Andi Kasir',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('petugas_email_field')),
+        'andi@depottelur36.com',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('petugas_pin_field')),
+        '4567',
+      );
+      await tapVisible(
+        tester,
+        find.byKey(const ValueKey('petugas_pin_visibility_toggle')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Sembunyikan PIN'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('crud_footer_save_button')));
+      await flushDb(tester);
+      expect(find.text('Andi Kasir'), findsOneWidget);
+      expect(find.text('andi@depottelur36.com'), findsOneWidget);
+    });
+
+    testWidgets('Atur Harga Jual menyoroti perubahan draft biru, bisa Reset & simpan batch ke SQLite', (
+      tester,
+    ) async {
+      await pumpMasterShell(tester, ownerSession());
+
+      // Buka shortcut Atur Harga dari Beranda
+      await tester.tap(find.text('Atur Harga'));
+      await tester.pumpAndSettle();
+      expect(find.text('Atur Harga Jual'), findsOneWidget);
+
+      // Filter Komoditas Telur -> Beras tidak tampil
+      await tester.tap(find.byKey(const ValueKey('price_filter_telur')));
+      await tester.pumpAndSettle();
+      expect(find.text('Beras Pandan Wangi 5 Kg'), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('price_filter_semua')));
+      await tester.pumpAndSettle();
+
+      // Edit harga Telur Ayam Negeri -> harus memunculkan caption "Sebelum Rp"
+      await tester.enterText(
+        find.byKey(
+          const ValueKey('atur_harga_input_seed-barang-telur-negeri-kg'),
+        ),
+        '30000',
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Sebelum Rp 28.500'), findsOneWidget);
+      expect(find.text('Simpan Harga Baru (1)'), findsOneWidget);
+
+      // Uji tombol Reset mengembalikan harga awal
+      await tester.tap(find.byKey(const ValueKey('atur_harga_reset_button')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Sebelum Rp'), findsNothing);
+
+      // Ubah lagi lalu Simpan Harga Baru
+      await tester.enterText(
+        find.byKey(
+          const ValueKey('atur_harga_input_seed-barang-telur-negeri-kg'),
+        ),
+        '30500',
+      );
+      await tester.tap(find.byKey(const ValueKey('atur_harga_save_button')));
+      await flushDb(tester);
+
+      expect(
+        find.text('1 harga jual barang berhasil diperbarui.'),
+        findsOneWidget,
+      );
+      final updated = (await tester.runAsync(
+        () => inventoryRepository.getAllBarang(),
+      ))!.firstWhere((b) => b.remoteId == 'seed-barang-telur-negeri-kg');
+      expect(updated.hargaSatuan, 30500);
+    });
+
+    testWidgets('Operator tidak melihat kategori Petugas/Atur Harga dan layar RBAC langsung terkunci', (
+      tester,
+    ) async {
+      await pumpMasterShell(tester, operatorSession());
+
+      await tester.tap(find.text('Stok'));
+      await tester.pumpAndSettle();
+      expect(find.text('Master Data Toko'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('master_category_tab_petugas')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('master_open_atur_harga_button')),
+        findsNothing,
+      );
+
+      // Push langsung PetugasFormScreen & AturHargaScreen dengan sesi Operator -> harus terkunci
+      final opVm = MasterCrudViewModel.fromRepository(
+        session: operatorSession(),
+        repository: inventoryRepository,
+      );
+      addTearDown(opVm.dispose);
+      await tester.runAsync(opVm.loadData);
+
+      await tester.pumpWidget(
+        wrapScreen(PetugasFormScreen(viewModel: opVm)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Akses Dibatasi'), findsOneWidget);
+      expect(find.text('Simpan Petugas'), findsNothing);
+
+      await tester.pumpWidget(
+        wrapScreen(AturHargaScreen(viewModel: opVm)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Akses Dibatasi'), findsOneWidget);
+      expect(find.text('Simpan Harga Baru'), findsNothing);
+    });
+
+    testWidgets('Viewport sempit (320x568), skala teks 1.4x & Reduce Motion pada semua layar Master CRUD bebas overflow', (
+      tester,
+    ) async {
+      final ownerVm = MasterCrudViewModel.fromRepository(
+        session: ownerSession(),
+        repository: inventoryRepository,
+      );
+      addTearDown(ownerVm.dispose);
+      await tester.runAsync(() async {
+        await inventoryRepository.savePetugas(
+          existingRemoteId: 'ui-owner-remote',
+          namaPetugas: 'Budi Owner',
+          role: UserRole.owner,
+          pin: '9999',
+          email: 'owner@depottelur36.com',
+        );
+        await ownerVm.loadData();
+      });
+
+      await pumpMasterShell(
+        tester,
+        ownerSession(),
+        size: const Size(320, 568),
+        textScale: 1.4,
+        disableAnimations: true,
+      );
+      await tester.tap(find.text('Master'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      for (final cat in [
+        MasterCategory.supplier,
+        MasterCategory.pelanggan,
+        MasterCategory.petugas,
+      ]) {
+        await tapVisible(
+          tester,
+          find.byKey(ValueKey('master_category_tab_${cat.name}')),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+      }
+
+      // Uji AturHargaScreen pada 320x568 textScale 1.4x
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<SyncService>.value(value: syncService),
+            Provider<InventoryRepository>.value(value: inventoryRepository),
+            ChangeNotifierProvider<AuthViewModel>.value(value: viewModel),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                disableAnimations: true,
+                textScaler: const TextScaler.linear(1.4),
+              ),
+              child: child!,
+            ),
+            home: AturHargaScreen(viewModel: ownerVm),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'Primitif micro-interaction TactilePressScale & RotatingSyncIcon bersifat finite dan patuh Reduce Motion',
+      (tester) async {
+        var spinning = false;
+        var reduceMotion = false;
+        late StateSetter setLocalState;
+
+        await tester.pumpWidget(
+          StatefulBuilder(
+            builder: (context, setState) {
+              setLocalState = setState;
+              return MaterialApp(
+                theme: AppTheme.light(),
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(context).copyWith(
+                    disableAnimations: reduceMotion,
+                  ),
+                  child: child!,
+                ),
+                home: Scaffold(
+                  body: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TactilePressScale(
+                          pressedScale: 0.92,
+                          child: Container(
+                            width: 140,
+                            height: 48,
+                            alignment: Alignment.center,
+                            color: AppColors.ink,
+                            child: Text(
+                              'Tekan Saya',
+                              style: AppTypography.body(
+                                color: AppColors.surface,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        RotatingSyncIcon(
+                          isSpinning: spinning,
+                          color: AppColors.ink,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final scaleFinder = find.descendant(
+          of: find.byType(TactilePressScale),
+          matching: find.byType(AnimatedScale),
+        );
+        expect(tester.widget<AnimatedScale>(scaleFinder).scale, 1.0);
+
+        final gesture = await tester.startGesture(
+          tester.getCenter(find.text('Tekan Saya')),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.widget<AnimatedScale>(scaleFinder).scale, 0.92);
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(tester.widget<AnimatedScale>(scaleFinder).scale, 1.0);
+
+        // RotatingSyncIcon tidak menggunakan repeat loop sehingga pumpAndSettle selesai bersih
+        setLocalState(() => spinning = true);
+        await tester.pump();
+        await tester.pumpAndSettle();
+        expect(find.byType(RotatingSyncIcon), findsOneWidget);
+
+        // Saat disableAnimations aktif, durasi skala langsung menjadi Duration.zero
+        setLocalState(() {
+          spinning = false;
+          reduceMotion = true;
+        });
+        await tester.pumpAndSettle();
+        expect(tester.widget<AnimatedScale>(scaleFinder).duration, Duration.zero);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'Micro-interaction Fungsi 2 & 3 (tab arah, Mode Edit pelanggan, role crossfade & Atur Harga shake) lolos normal & Reduce Motion',
+      (tester) async {
+        await tester.runAsync(() async {
+          await inventoryRepository.savePetugas(
+            existingRemoteId: 'ui-owner-remote',
+            namaPetugas: 'Budi Owner',
+            role: UserRole.owner,
+            pin: '9999',
+            email: 'owner@depottelur36.com',
+          );
+        });
+
+        await pumpMasterShell(tester, ownerSession());
+
+        // Beralih tab Beranda -> Master -> Pelanggan memicu animasi transisi arah tab & kategori
+        await tester.tap(find.text('Master'));
+        await tester.pumpAndSettle();
+        await tapVisible(
+          tester,
+          find.byKey(const ValueKey('master_category_tab_pelanggan')),
+        );
+        await tester.pumpAndSettle();
+
+        // Validasi QuickCustomerForm kosong memicu ShakeOnError
+        await tapVisible(
+          tester,
+          find.byKey(const ValueKey('customer_quick_save_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byWidgetPredicate((w) => w is ShakeOnError && w.pulse > 0),
+          findsOneWidget,
+        );
+        expect(find.text('Tambah Pelanggan Baru'), findsOneWidget);
+
+        // Buat pelanggan lalu masuk mode edit -> badge 'Mode Edit' & judul edit muncul
+        await tester.enterText(
+          find.byKey(const ValueKey('customer_quick_nama_field')),
+          'Warung Uji Motion',
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('customer_quick_save_button')),
+        );
+        await flushDb(tester);
+
+        final createdCustomer = (await tester.runAsync(
+          () => inventoryRepository.getAllCustomer(),
+        ))!
+            .firstWhere((c) => c.namaCustomer == 'Warung Uji Motion');
+        await tapVisible(
+          tester,
+          find.byKey(ValueKey('edit_customer_${createdCustomer.remoteId}')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Ubah Nama Pelanggan'), findsOneWidget);
+        expect(find.text('Mode Edit'), findsOneWidget);
+        expect(find.byType(AnimatedBadgePop), findsOneWidget);
+
+        // Simpan edit pelanggan menutup Mode Edit dengan bersih
+        await tester.enterText(
+          find.byKey(const ValueKey('customer_quick_nama_field')),
+          'Warung Uji Motion Baru',
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('customer_quick_save_button')),
+        );
+        await flushDb(tester);
+        expect(find.text('Mode Edit'), findsNothing);
+        expect(find.text('Warung Uji Motion Baru'), findsOneWidget);
+
+        // Uji kembali ke Beranda -> pintasan Petugas/Form & Atur Harga
+        await tester.tap(find.text('Beranda'));
+        await tester.pumpAndSettle();
+        expect(find.text('DepotTelur36 Owner'), findsOneWidget);
+
+        final ownerVm = MasterCrudViewModel.fromRepository(
+          session: ownerSession(),
+          repository: inventoryRepository,
+        );
+        addTearDown(ownerVm.dispose);
+        await tester.runAsync(ownerVm.loadData);
+
+        Future<void> verifyForms({required bool disableAnimations}) async {
+          await tester.pumpWidget(
+            MultiProvider(
+              providers: [
+                ChangeNotifierProvider<SyncService>.value(value: syncService),
+                Provider<InventoryRepository>.value(
+                  value: inventoryRepository,
+                ),
+                ChangeNotifierProvider<AuthViewModel>.value(value: viewModel),
+              ],
+              child: MaterialApp(
+                theme: AppTheme.light(),
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(context).copyWith(
+                    disableAnimations: disableAnimations,
+                  ),
+                  child: child!,
+                ),
+                home: PetugasFormScreen(viewModel: ownerVm),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          // Crossfade deskripsi role Owner <-> Petugas
+          await tester.tap(
+            find.byKey(ValueKey('petugas_role_${UserRole.owner.value}')),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.text(
+              'Owner dapat mengakses laporan omzet, atur harga jual, dan kelola akun.',
+            ),
+            findsOneWidget,
+          );
+          await tester.tap(
+            find.byKey(ValueKey('petugas_role_${UserRole.petugas.value}')),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.text(
+              'Petugas fokus pada transaksi kasir, faktur masuk, dan daftar master operasional.',
+            ),
+            findsOneWidget,
+          );
+
+          // Toggle visibility PIN beranimasi bersih
+          await tapVisible(
+            tester,
+            find.byKey(const ValueKey('petugas_pin_visibility_toggle')),
+          );
+          await tester.pumpAndSettle();
+          expect(find.byTooltip('Sembunyikan PIN'), findsOneWidget);
+
+          // Submit kosong memicu ShakeOnError pada PetugasFormScreen
+          await tapVisible(
+            tester,
+            find.byKey(const ValueKey('crud_footer_save_button')),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.byWidgetPredicate((w) => w is ShakeOnError && w.pulse > 0),
+            findsOneWidget,
+          );
+
+          // Uji AturHargaScreen batch kosong -> ShakeOnError + error banner, lalu edit draft biru
+          await tester.pumpWidget(
+            MultiProvider(
+              providers: [
+                ChangeNotifierProvider<SyncService>.value(value: syncService),
+                Provider<InventoryRepository>.value(
+                  value: inventoryRepository,
+                ),
+                ChangeNotifierProvider<AuthViewModel>.value(value: viewModel),
+              ],
+              child: MaterialApp(
+                theme: AppTheme.light(),
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(context).copyWith(
+                    disableAnimations: disableAnimations,
+                  ),
+                  child: child!,
+                ),
+                home: AturHargaScreen(viewModel: ownerVm),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          await tester.tap(
+            find.byKey(const ValueKey('atur_harga_save_button')),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.text('Ubah minimal satu harga barang terlebih dahulu.'),
+            findsOneWidget,
+          );
+          expect(
+            find.byWidgetPredicate((w) => w is ShakeOnError && w.pulse > 0),
+            findsOneWidget,
+          );
+
+          await tester.enterText(
+            find.byKey(
+              const ValueKey('atur_harga_input_seed-barang-telur-negeri-kg'),
+            ),
+            '29900',
+          );
+          await tester.pumpAndSettle();
+          expect(find.textContaining('Sebelum Rp 28.500'), findsOneWidget);
+          expect(find.text('Simpan Harga Baru (1)'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        }
+
+        await verifyForms(disableAnimations: false);
+        await verifyForms(disableAnimations: true);
+      },
+    );
   });
 }

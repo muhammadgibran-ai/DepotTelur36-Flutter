@@ -170,6 +170,7 @@ class SyncService extends ChangeNotifier {
 
     try {
       await _runSerialized(() async {
+        await _pushPendingDeletes();
         await _seedCloudCollectionsIfEmpty();
         await _pushPendingMasters();
         await _pushPendingFaktur();
@@ -262,6 +263,23 @@ class SyncService extends ChangeNotifier {
     }
 
     _cloudSeedChecked = true;
+  }
+
+  Future<void> _pushPendingDeletes() async {
+    final deletes = await _dbHelper.getPendingDeletes();
+    for (final entry in deletes) {
+      final collection = switch (entry.tableName) {
+        'supplier' => colSupplier,
+        'petugas' => colPetugas,
+        'customer' => colCustomer,
+        'barang' => colBarang,
+        _ => null,
+      };
+      if (collection != null && entry.remoteId.isNotEmpty) {
+        await _firestore.collection(collection).doc(entry.remoteId).delete();
+      }
+      await _dbHelper.removePendingDelete(entry.tableName, entry.remoteId);
+    }
   }
 
   Future<void> _pushPendingMasters() async {

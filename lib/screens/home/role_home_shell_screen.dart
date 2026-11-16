@@ -10,11 +10,16 @@ import 'package:depot_telur_36/models/barang.dart';
 import 'package:depot_telur_36/models/dashboard_models.dart';
 import 'package:depot_telur_36/repositories/inventory_repository.dart';
 import 'package:depot_telur_36/screens/auth/welcome_screen.dart';
+import 'package:depot_telur_36/screens/master/atur_harga_screen.dart';
+import 'package:depot_telur_36/screens/master/barang_form_screen.dart';
+import 'package:depot_telur_36/screens/master/master_data_tab_view.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/viewmodels/dashboard_view_model.dart';
+import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
 import 'package:depot_telur_36/widgets/dashboard_widgets.dart';
+import 'package:depot_telur_36/widgets/ux_motion_widgets.dart';
 
 /// Navigasi terpusat pasca-login menuju Dashboard Beranda RBAC sesuai [session].
 void navigateToRoleHome(BuildContext context, AuthSession session) {
@@ -47,10 +52,12 @@ class RoleHomeShellScreen extends StatefulWidget {
     super.key,
     required this.initialSession,
     this.viewModelOverride,
+    this.masterViewModelOverride,
   });
 
   final AuthSession initialSession;
   final DashboardViewModel? viewModelOverride;
+  final MasterCrudViewModel? masterViewModelOverride;
 
   @override
   State<RoleHomeShellScreen> createState() => _RoleHomeShellScreenState();
@@ -58,17 +65,24 @@ class RoleHomeShellScreen extends StatefulWidget {
 
 class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
   DashboardViewModel? _ownedViewModel;
+  MasterCrudViewModel? _ownedMasterViewModel;
+  DashboardViewModel? _bridgeListenedVm;
+  DashboardViewModel? _tabTrackedVm;
+  DashboardTabId? _lastTrackedTab;
+  int _tabSlideSign = 1;
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
 
   DashboardViewModel get _vm => widget.viewModelOverride ?? _ownedViewModel!;
+  MasterCrudViewModel get _masterVm =>
+      widget.masterViewModelOverride ?? _ownedMasterViewModel!;
 
   @override
   void initState() {
     super.initState();
     _searchFocusNode.addListener(_onSearchFocusChanged);
+    final repo = _maybeRead<InventoryRepository>(context);
     if (widget.viewModelOverride == null) {
-      final repo = _maybeRead<InventoryRepository>(context);
       _ownedViewModel = repo != null
           ? DashboardViewModel.fromRepository(
               session: widget.initialSession,
@@ -81,6 +95,53 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
       unawaited(_ownedViewModel!.loadDashboardData());
     } else if (_searchController.text != widget.viewModelOverride!.searchQuery) {
       _searchController.text = widget.viewModelOverride!.searchQuery;
+    }
+
+    if (widget.masterViewModelOverride == null) {
+      if (repo != null) {
+        _ownedMasterViewModel = MasterCrudViewModel.fromRepository(
+          session: widget.initialSession,
+          repository: repo,
+        );
+        unawaited(_ownedMasterViewModel!.loadData());
+      } else {
+        _ownedMasterViewModel = MasterCrudViewModel(
+          session: widget.initialSession,
+          dataSource: ReadOnlyDashboardBridgeDataSource(_vm),
+        );
+        _bridgeListenedVm = _vm..addListener(_onBridgeDashboardChanged);
+        unawaited(_ownedMasterViewModel!.loadData(silent: true));
+      }
+    }
+    _attachTabTracker(_vm);
+  }
+
+  void _attachTabTracker(DashboardViewModel targetVm) {
+    if (_tabTrackedVm == targetVm) return;
+    _tabTrackedVm?.removeListener(_onTrackedTabChanged);
+    _tabTrackedVm = targetVm;
+    _lastTrackedTab = targetVm.activeTab;
+    targetVm.addListener(_onTrackedTabChanged);
+  }
+
+  void _onTrackedTabChanged() {
+    final vm = _tabTrackedVm;
+    if (vm == null) return;
+    final current = vm.activeTab;
+    if (_lastTrackedTab != null && _lastTrackedTab != current) {
+      final oldIdx = vm.tabs.indexWhere((t) => t.id == _lastTrackedTab);
+      final newIdx = vm.tabs.indexWhere((t) => t.id == current);
+      if (oldIdx != -1 && newIdx != -1) {
+        _tabSlideSign = newIdx >= oldIdx ? 1 : -1;
+      }
+    }
+    _lastTrackedTab = current;
+  }
+
+  void _onBridgeDashboardChanged() {
+    final masterVm = _ownedMasterViewModel;
+    if (masterVm != null && mounted) {
+      unawaited(masterVm.loadData(silent: true));
     }
   }
 
@@ -95,10 +156,29 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
         oldWidget.initialSession != widget.initialSession) {
       _ownedViewModel!.updateSession(widget.initialSession);
     }
+    if (_ownedMasterViewModel != null &&
+        oldWidget.initialSession != widget.initialSession) {
+      _ownedMasterViewModel!.updateSession(widget.initialSession);
+    }
     if (widget.viewModelOverride != null &&
-        widget.viewModelOverride != oldWidget.viewModelOverride &&
-        _searchController.text != widget.viewModelOverride!.searchQuery) {
-      _searchController.text = widget.viewModelOverride!.searchQuery;
+        widget.viewModelOverride != oldWidget.viewModelOverride) {
+      if (_searchController.text != widget.viewModelOverride!.searchQuery) {
+        _searchController.text = widget.viewModelOverride!.searchQuery;
+      }
+      if (_bridgeListenedVm != null) {
+        _bridgeListenedVm!.removeListener(_onBridgeDashboardChanged);
+        _ownedMasterViewModel?.dispose();
+        _ownedMasterViewModel = MasterCrudViewModel(
+          session: widget.initialSession,
+          dataSource: ReadOnlyDashboardBridgeDataSource(
+            widget.viewModelOverride!,
+          ),
+        );
+        _bridgeListenedVm = widget.viewModelOverride!
+          ..addListener(_onBridgeDashboardChanged);
+        unawaited(_ownedMasterViewModel!.loadData(silent: true));
+      }
+      _attachTabTracker(widget.viewModelOverride!);
     }
   }
 
@@ -106,16 +186,20 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final authSession = _maybeWatch<AuthViewModel>(context)?.session;
-    if (authSession != null && _ownedViewModel != null) {
-      _ownedViewModel!.updateSession(authSession);
+    if (authSession != null) {
+      _ownedViewModel?.updateSession(authSession);
+      _ownedMasterViewModel?.updateSession(authSession);
     }
   }
 
   @override
   void dispose() {
+    _tabTrackedVm?.removeListener(_onTrackedTabChanged);
+    _bridgeListenedVm?.removeListener(_onBridgeDashboardChanged);
     _searchFocusNode.removeListener(_onSearchFocusChanged);
     _searchFocusNode.dispose();
     _searchController.dispose();
+    _ownedMasterViewModel?.dispose();
     _ownedViewModel?.dispose();
     super.dispose();
   }
@@ -157,7 +241,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     );
   }
 
-  void _handleActivateShortcut(DashboardShortcutSpec shortcut) {
+  Future<void> _handleActivateShortcut(DashboardShortcutSpec shortcut) async {
     final authorized = _vm.activateShortcut(shortcut.id);
     if (authorized == null) {
       if (_vm.accessDeniedMessage != null) {
@@ -166,26 +250,55 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
       return;
     }
 
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (sheetContext) {
-        return _ShortcutDetailSheet(
-          shortcut: authorized,
-          vm: _vm,
-          onNavigateTab: authorized.targetTab == null
-              ? null
-              : () {
-                  Navigator.of(sheetContext).pop();
-                  _handleSelectTab(authorized.targetTab!);
-                },
+    switch (authorized.id) {
+      case DashboardShortcutId.aturHarga:
+        await Navigator.of(
+          context,
+        ).push<bool>(buildAuthRoute<bool>(AturHargaScreen(viewModel: _masterVm)));
+        return;
+      case DashboardShortcutId.dataSupplier:
+      case DashboardShortcutId.supplier:
+        _masterVm.selectCategory(MasterCategory.supplier);
+        _handleSelectTab(
+          authorized.targetTab ??
+              (_vm.isOwner ? DashboardTabId.master : DashboardTabId.stok),
         );
-      },
-    );
+        return;
+      case DashboardShortcutId.pelanggan:
+        _masterVm.selectCategory(MasterCategory.pelanggan);
+        _handleSelectTab(
+          authorized.targetTab ??
+              (_vm.isOwner ? DashboardTabId.master : DashboardTabId.stok),
+        );
+        return;
+      case DashboardShortcutId.akunPetugas:
+        _masterVm.selectCategory(MasterCategory.petugas);
+        _handleSelectTab(DashboardTabId.master);
+        return;
+      case DashboardShortcutId.riwayatFaktur:
+      case DashboardShortcutId.riwayatNota:
+        showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: AppColors.surface,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          builder: (sheetContext) {
+            return _ShortcutDetailSheet(
+              shortcut: authorized,
+              vm: _vm,
+              onNavigateTab: authorized.targetTab == null
+                  ? null
+                  : () {
+                      Navigator.of(sheetContext).pop();
+                      _handleSelectTab(authorized.targetTab!);
+                    },
+            );
+          },
+        );
+        return;
+    }
   }
 
   void _openNotificationSheet() {
@@ -251,6 +364,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
             ? Duration.zero
             : const Duration(milliseconds: 220);
 
+        final isMasterTab =
+            _vm.activeTab == DashboardTabId.master ||
+            _vm.activeTab == DashboardTabId.stok;
+
         return PopScope(
           canPop:
               _vm.activeTab == DashboardTabId.beranda && !isSubmittingSignOut,
@@ -261,58 +378,110 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
           child: Scaffold(
             backgroundColor: AppColors.surfaceWarm,
             extendBody: true,
-            body: Column(
-            children: [
-              _DashboardHeader(
-                session: session,
-                searchController: _searchController,
-                searchFocusNode: _searchFocusNode,
-                searchQuery: _vm.searchQuery,
-                unreadCount: _vm.unreadCount,
-                unreadBadgeText: _vm.unreadBadgeText,
-                hasActiveFilter:
-                    _vm.activeFilter != DashboardQuickFilter.semua ||
-                    _vm.isFilterBarExpanded,
-                isSigningOut: isSubmittingSignOut,
-                onSearchChanged: _handleSearchChanged,
-                onClearSearch: () {
-                  _searchController.clear();
-                  _vm.clearSearch();
-                },
-                onToggleFilter: _vm.toggleFilterBar,
-                onOpenNotifications: _openNotificationSheet,
-                onSignOut: isSubmittingSignOut ? null : _handleSignOut,
-              ),
-              AnimatedSize(
-                duration: filterAnimationDuration,
-                curve: Curves.easeOutCubic,
-                child:
-                    (_vm.isFilterBarExpanded ||
-                        _vm.activeFilter != DashboardQuickFilter.semua)
-                    ? Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: QuickFilterChipBar(
-                          activeFilter: _vm.activeFilter,
-                          onSelected: _vm.setQuickFilter,
-                        ),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              Expanded(
-                child: RefreshIndicator(
-                  color: AppColors.ink,
-                  backgroundColor: AppColors.surface,
-                  onRefresh: _vm.loadDashboardData,
-                  child: AnimatedSwitcher(
-                    duration: disableAnimations
-                        ? Duration.zero
-                        : const Duration(milliseconds: 180),
-                    child: _buildTabScrollView(context, session),
+            body: AnimatedSwitcher(
+              duration: disableAnimations
+                  ? Duration.zero
+                  : const Duration(milliseconds: 220),
+              switchInCurve: AppTokens.arrivalCurve,
+              switchOutCurve: Curves.easeIn,
+              transitionBuilder: (child, animation) {
+                if (disableAnimations) {
+                  return FadeTransition(opacity: animation, child: child);
+                }
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: Offset(0.03 * _tabSlideSign, 0),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
                   ),
-                ),
-              ),
-            ],
-          ),
+                );
+              },
+              child: isMasterTab
+                  ? MasterDataTabView(
+                      key: ValueKey('master_tab_${_vm.activeTab.name}'),
+                      viewModel: _masterVm,
+                      onRefreshRequested: _vm.loadDashboardData,
+                    )
+                  : Column(
+                      key: const ValueKey('dashboard_main_shell'),
+                      children: [
+                        _DashboardHeader(
+                          session: session,
+                          searchController: _searchController,
+                          searchFocusNode: _searchFocusNode,
+                          searchQuery: _vm.searchQuery,
+                          unreadCount: _vm.unreadCount,
+                          unreadBadgeText: _vm.unreadBadgeText,
+                          hasActiveFilter:
+                              _vm.activeFilter != DashboardQuickFilter.semua ||
+                              _vm.isFilterBarExpanded,
+                          isSigningOut: isSubmittingSignOut,
+                          onSearchChanged: _handleSearchChanged,
+                          onClearSearch: () {
+                            HapticFeedback.selectionClick();
+                            _searchController.clear();
+                            _vm.clearSearch();
+                          },
+                          onToggleFilter: _vm.toggleFilterBar,
+                          onOpenNotifications: _openNotificationSheet,
+                          onSignOut: isSubmittingSignOut ? null : _handleSignOut,
+                        ),
+                        AnimatedSize(
+                          duration: filterAnimationDuration,
+                          curve: AppTokens.arrivalCurve,
+                          clipBehavior: Clip.hardEdge,
+                          child:
+                              (_vm.isFilterBarExpanded ||
+                                  _vm.activeFilter !=
+                                      DashboardQuickFilter.semua)
+                              ? Padding(
+                                  padding: const EdgeInsets.only(top: 10),
+                                  child: QuickFilterChipBar(
+                                    activeFilter: _vm.activeFilter,
+                                    onSelected: _vm.setQuickFilter,
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                        Expanded(
+                          child: RefreshIndicator(
+                            color: AppColors.ink,
+                            backgroundColor: AppColors.surface,
+                            onRefresh: _vm.loadDashboardData,
+                            child: AnimatedSwitcher(
+                              duration: disableAnimations
+                                  ? Duration.zero
+                                  : const Duration(milliseconds: 200),
+                              switchInCurve: AppTokens.arrivalCurve,
+                              switchOutCurve: Curves.easeIn,
+                              transitionBuilder: (child, animation) {
+                                if (disableAnimations) {
+                                  return FadeTransition(
+                                    opacity: animation,
+                                    child: child,
+                                  );
+                                }
+                                return FadeTransition(
+                                  opacity: animation,
+                                  child: SlideTransition(
+                                    position: Tween<Offset>(
+                                      begin: Offset(0.03 * _tabSlideSign, 0),
+                                      end: Offset.zero,
+                                    ).animate(animation),
+                                    child: child,
+                                  ),
+                                );
+                              },
+                              child: _buildTabScrollView(context, session),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
             bottomNavigationBar: FloatingTabBar(
               tabs: _vm.tabs,
               activeTab: _vm.activeTab,
@@ -329,10 +498,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
       DashboardTabId.beranda => _buildBerandaContent(context, session),
       DashboardTabId.omzet => _buildOwnerOmzetContent(),
       DashboardTabId.nota => _buildOwnerNotaContent(),
-      DashboardTabId.master => _buildCatalogTabContent(isOwnerView: true),
+      DashboardTabId.master => const <Widget>[],
       DashboardTabId.kasir => _buildOperatorKasirContent(),
       DashboardTabId.faktur => _buildOperatorFakturContent(),
-      DashboardTabId.stok => _buildCatalogTabContent(isOwnerView: false),
+      DashboardTabId.stok => const <Widget>[],
     };
 
     return ListView(
@@ -480,26 +649,30 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
           Semantics(
             button: true,
             label: 'Lihat semua stok barang',
-            child: TextButton(
-              onPressed: () {
-                HapticFeedback.selectionClick();
-                _handleSelectTab(
-                  session.isOwner
-                      ? DashboardTabId.master
-                      : DashboardTabId.stok,
-                );
-              },
-              style: TextButton.styleFrom(
-                minimumSize: const Size(48, 48),
-                foregroundColor: AppColors.ink,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              child: Text(
-                'Lihat Semua',
-                style: AppTypography.body(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.ink,
+            child: TactilePressScale(
+              pressedScale: 0.94,
+              child: TextButton(
+                onPressed: () {
+                  HapticFeedback.selectionClick();
+                  _masterVm.selectCategory(MasterCategory.barang);
+                  _handleSelectTab(
+                    session.isOwner
+                        ? DashboardTabId.master
+                        : DashboardTabId.stok,
+                  );
+                },
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(48, 48),
+                  foregroundColor: AppColors.ink,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                child: Text(
+                  'Lihat Semua',
+                  style: AppTypography.body(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.ink,
+                  ),
                 ),
               ),
             ),
@@ -712,54 +885,6 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     return trimmed.length <= 6 ? trimmed : trimmed.substring(0, 6);
   }
 
-  List<Widget> _buildCatalogTabContent({required bool isOwnerView}) {
-    final m = _vm.metrics;
-    return [
-      _ModuleStagingBanner(
-        badge: isOwnerView ? 'Master Data RBAC' : 'Gudang DepotTelur36',
-        title: isOwnerView
-            ? 'Katalog Barang & Master Entitas'
-            : 'Seluruh Ketersediaan Gudang',
-        subtitle: isOwnerView
-            ? '${m.totalBarang} Barang · ${m.totalSupplier} Supplier · ${m.totalCustomer} Pelanggan · ${m.totalPetugas} Akun'
-            : '${m.totalBarang} Barang aktif · ${m.lowStockCount} perlu perhatian · ${m.totalSupplier} Supplier',
-      ),
-      const SizedBox(height: 12),
-      if (_vm.hasActiveSearchOrFilter) ...[
-        _ActiveFilterSummaryRow(
-          resultCount: _vm.filteredBarang.length,
-          activeFilter: _vm.activeFilter,
-          query: _vm.searchQuery,
-          onReset: _handleResetSearchAndFilter,
-        ),
-        const SizedBox(height: 10),
-      ],
-      if (_vm.filteredBarang.isEmpty)
-        _EmptyFilterCard(
-          hasQueryOrFilter: _vm.hasActiveSearchOrFilter,
-          onReset: _handleResetSearchAndFilter,
-        )
-      else ...[
-        for (final item in _vm.lowStockItems) ...[
-          LowStockAlertCard(
-            barang: item,
-            onRestock: () => _handleRestockRequested(
-              item.namaBarang,
-              item.stokBarang,
-              item.satuan,
-            ),
-          ),
-          const SizedBox(height: 10),
-        ],
-        if (_vm.normalStockItems.isNotEmpty)
-          HomeStockListCard(
-            items: _vm.normalStockItems,
-            onItemTap: _showBarangQuickSheet,
-          ),
-      ],
-    ];
-  }
-
   void _showBarangQuickSheet(Barang barang) {
     showModalBottomSheet<void>(
       context: context,
@@ -817,6 +942,42 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
                   style: AppTypography.body(
                     fontSize: 13,
                     color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TactilePressScale(
+                  pressedScale: 0.97,
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: FilledButton.icon(
+                      onPressed: () async {
+                        HapticFeedback.lightImpact();
+                        Navigator.of(sheetContext).pop();
+                        if (!mounted) return;
+                        await Navigator.of(context).push<bool>(
+                          buildAuthRoute<bool>(
+                            BarangFormScreen(
+                              viewModel: _masterVm,
+                              initialBarang: barang,
+                            ),
+                          ),
+                        );
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.ink,
+                        foregroundColor: AppColors.surface,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      icon: const Icon(
+                        Icons.edit_rounded,
+                        size: 18,
+                        color: AppColors.yolk,
+                      ),
+                      label: const Text('Edit Data Barang'),
+                    ),
                   ),
                 ),
               ],
@@ -899,40 +1060,41 @@ class _DashboardHeader extends StatelessWidget {
                         : 'Buka notifikasi, tidak ada peringatan baru',
                     child: Tooltip(
                       message: 'Notifikasi & Sinkronisasi',
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: onOpenNotifications,
-                          customBorder: const CircleBorder(),
-                          child: SizedBox(
-                            width: 48,
-                            height: 48,
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              alignment: Alignment.center,
-                              children: [
-                                Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: const BoxDecoration(
-                                    color: AppColors.surface,
-                                    shape: BoxShape.circle,
+                      child: TactilePressScale(
+                        pressedScale: 0.92,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: onOpenNotifications,
+                            customBorder: const CircleBorder(),
+                            child: SizedBox(
+                              width: 48,
+                              height: 48,
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                alignment: Alignment.center,
+                                children: [
+                                  Container(
+                                    width: 44,
+                                    height: 44,
+                                    decoration: const BoxDecoration(
+                                      color: AppColors.surface,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.notifications_rounded,
+                                      size: 20,
+                                      color: AppColors.ink,
+                                    ),
                                   ),
-                                  child: const Icon(
-                                    Icons.notifications_rounded,
-                                    size: 20,
-                                    color: AppColors.ink,
-                                  ),
-                                ),
-                                if (unreadCount > 0)
                                   Positioned(
                                     top: 2,
                                     right: 2,
-                                    child: AnimatedScale(
-                                      scale: 1.0,
-                                      duration: disableAnimations
-                                          ? Duration.zero
-                                          : const Duration(milliseconds: 180),
+                                    child: AnimatedBadgePop(
+                                      visible: unreadCount > 0,
+                                      badgeKey: ValueKey(
+                                        'header_unread_$unreadBadgeText',
+                                      ),
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 5,
@@ -966,7 +1128,8 @@ class _DashboardHeader extends StatelessWidget {
                                       ),
                                     ),
                                   ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -994,7 +1157,11 @@ class _DashboardHeader extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: Container(
+                    child: AnimatedContainer(
+                      duration: disableAnimations
+                          ? Duration.zero
+                          : const Duration(milliseconds: 160),
+                      curve: AppTokens.arrivalCurve,
                       constraints: const BoxConstraints(minHeight: 48),
                       decoration: BoxDecoration(
                         color: AppColors.surface,
@@ -1005,6 +1172,15 @@ class _DashboardHeader extends StatelessWidget {
                               : Colors.transparent,
                           width: 1.5,
                         ),
+                        boxShadow: searchFocusNode.hasFocus
+                            ? const [
+                                BoxShadow(
+                                  color: Color(0x14121212),
+                                  blurRadius: 8,
+                                  offset: Offset(0, 2),
+                                ),
+                              ]
+                            : const [],
                       ),
                       child: TextField(
                         controller: searchController,
@@ -1036,17 +1212,29 @@ class _DashboardHeader extends StatelessWidget {
                             fontSize: 13,
                             color: AppColors.textSecondary,
                           ),
-                          suffixIcon: searchQuery.isEmpty
-                              ? null
-                              : IconButton(
-                                  tooltip: 'Hapus pencarian',
-                                  onPressed: onClearSearch,
-                                  icon: const Icon(
-                                    Icons.close_rounded,
-                                    size: 18,
-                                    color: AppColors.textSecondary,
+                          suffixIcon: AnimatedSwitcher(
+                            duration: disableAnimations
+                                ? Duration.zero
+                                : const Duration(milliseconds: 160),
+                            transitionBuilder: (child, anim) => FadeTransition(
+                              opacity: anim,
+                              child: ScaleTransition(scale: anim, child: child),
+                            ),
+                            child: searchQuery.isEmpty
+                                ? const SizedBox.shrink(
+                                    key: ValueKey('search_empty'),
+                                  )
+                                : IconButton(
+                                    key: const ValueKey('search_clear'),
+                                    tooltip: 'Hapus pencarian',
+                                    onPressed: onClearSearch,
+                                    icon: const Icon(
+                                      Icons.close_rounded,
+                                      size: 18,
+                                      color: AppColors.textSecondary,
+                                    ),
                                   ),
-                                ),
+                          ),
                         ),
                       ),
                     ),
@@ -1057,40 +1245,55 @@ class _DashboardHeader extends StatelessWidget {
                     label: 'Filter cepat stok dan kategori',
                     child: Tooltip(
                       message: 'Filter cepat',
-                      child: Material(
-                        color: AppColors.ink,
-                        borderRadius: BorderRadius.circular(14),
-                        child: InkWell(
-                          onTap: () {
-                            HapticFeedback.selectionClick();
-                            onToggleFilter();
-                          },
+                      child: TactilePressScale(
+                        pressedScale: 0.92,
+                        child: Material(
+                          color: AppColors.ink,
                           borderRadius: BorderRadius.circular(14),
-                          child: SizedBox(
-                            width: 48,
-                            height: 48,
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                const Icon(
-                                  Icons.filter_alt_rounded,
-                                  size: 20,
-                                  color: Color(0xFFFFB511),
-                                ),
-                                if (hasActiveFilter)
+                          child: InkWell(
+                            onTap: () {
+                              HapticFeedback.selectionClick();
+                              onToggleFilter();
+                            },
+                            borderRadius: BorderRadius.circular(14),
+                            child: SizedBox(
+                              width: 48,
+                              height: 48,
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  AnimatedRotation(
+                                    turns: (hasActiveFilter && !disableAnimations)
+                                        ? -0.05
+                                        : 0.0,
+                                    duration: disableAnimations
+                                        ? Duration.zero
+                                        : AppTokens.stateDuration,
+                                    curve: Curves.easeOutCubic,
+                                    child: const Icon(
+                                      Icons.filter_alt_rounded,
+                                      size: 20,
+                                      color: Color(0xFFFFB511),
+                                    ),
+                                  ),
                                   Positioned(
                                     top: 8,
                                     right: 8,
-                                    child: Container(
-                                      width: 8,
-                                      height: 8,
-                                      decoration: const BoxDecoration(
-                                        color: AppColors.yolk,
-                                        shape: BoxShape.circle,
+                                    child: AnimatedBadgePop(
+                                      visible: hasActiveFilter,
+                                      badgeKey: const ValueKey('filter_dot'),
+                                      child: Container(
+                                        width: 8,
+                                        height: 8,
+                                        decoration: const BoxDecoration(
+                                          color: AppColors.yolk,
+                                          shape: BoxShape.circle,
+                                        ),
                                       ),
                                     ),
                                   ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),

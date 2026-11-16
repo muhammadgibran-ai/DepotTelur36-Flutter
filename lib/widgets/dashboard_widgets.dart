@@ -6,6 +6,7 @@ import 'package:depot_telur_36/models/barang.dart';
 import 'package:depot_telur_36/models/dashboard_models.dart';
 import 'package:depot_telur_36/services/sync_service.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
+import 'package:depot_telur_36/widgets/ux_motion_widgets.dart';
 
 const Color _menuIconYellow = Color(0xFFFFB511);
 
@@ -184,41 +185,53 @@ class QuickFilterChipBar extends StatelessWidget {
         itemBuilder: (context, index) {
           final filter = DashboardQuickFilter.values[index];
           final selected = filter == activeFilter;
+          final disableMotion = MediaQuery.disableAnimationsOf(context);
+          final duration = disableMotion
+              ? Duration.zero
+              : const Duration(milliseconds: 180);
           return Center(
             child: Semantics(
               button: true,
               selected: selected,
               label: 'Filter ${filter.label}',
-              child: Material(
-                color: selected ? AppColors.ink : AppColors.surface,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(999),
-                  side: BorderSide(
-                    color: selected ? AppColors.ink : AppColors.borderSubtle,
-                  ),
-                ),
-                child: InkWell(
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    onSelected(filter);
-                  },
-                  borderRadius: BorderRadius.circular(999),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      minWidth: 48,
-                      minHeight: 48,
+              child: TactilePressScale(
+                pressedScale: 0.94,
+                child: AnimatedContainer(
+                  duration: duration,
+                  curve: Curves.easeOutCubic,
+                  decoration: BoxDecoration(
+                    color: selected ? AppColors.ink : AppColors.surface,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: selected ? AppColors.ink : AppColors.borderSubtle,
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      child: Center(
-                        child: Text(
-                          filter.label,
-                          style: AppTypography.body(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w700,
-                            color: selected
-                                ? Colors.white
-                                : AppColors.textPrimary,
+                  ),
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: InkWell(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        onSelected(filter);
+                      },
+                      borderRadius: BorderRadius.circular(999),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          minWidth: 48,
+                          minHeight: 48,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          child: Center(
+                            child: Text(
+                              filter.label,
+                              style: AppTypography.body(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                                color: selected
+                                    ? Colors.white
+                                    : AppColors.textPrimary,
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -301,26 +314,29 @@ class LowStockAlertCard extends StatelessWidget {
           Semantics(
             button: true,
             label: 'Restock ${barang.namaBarang}',
-            child: Material(
-              color: AppColors.danger,
-              borderRadius: BorderRadius.circular(12),
-              child: InkWell(
-                onTap: () {
-                  HapticFeedback.lightImpact();
-                  onRestock();
-                },
+            child: TactilePressScale(
+              pressedScale: 0.94,
+              child: Material(
+                color: AppColors.danger,
                 borderRadius: BorderRadius.circular(12),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(minWidth: 68, minHeight: 48),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 14),
-                    child: Center(
-                      child: Text(
-                        'Restock',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                child: InkWell(
+                  onTap: () {
+                    HapticFeedback.lightImpact();
+                    onRestock();
+                  },
+                  borderRadius: BorderRadius.circular(12),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: 68, minHeight: 48),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 14),
+                      child: Center(
+                        child: Text(
+                          'Restock',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
                     ),
@@ -447,11 +463,17 @@ class _StockRow extends StatelessWidget {
       button: true,
       label:
           '${barang.namaBarang}, harga ${formatRupiah(barang.hargaSatuan)}, stok ${barang.stokBarang} ${barang.satuan}',
-      child: InkWell(
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 56),
-          child: rowContent,
+      child: TactilePressScale(
+        pressedScale: 0.985,
+        child: InkWell(
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onTap!();
+          },
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 56),
+            child: rowContent,
+          ),
         ),
       ),
     );
@@ -538,44 +560,53 @@ class _FloatingTabItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
     final fgColor = isActive ? AppColors.ink : AppColors.textSecondary;
 
     return Semantics(
       button: true,
       selected: isActive,
       label: tab.semanticLabel,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(24),
-          child: AnimatedContainer(
-            duration: duration,
-            curve: Curves.easeOutCubic,
-            constraints: const BoxConstraints(minHeight: 52, minWidth: 48),
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-            decoration: BoxDecoration(
-              color: isActive ? AppColors.yolkSoft : Colors.transparent,
-              borderRadius: BorderRadius.circular(24),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(tabIconFor(tab.id), size: 20, color: fgColor),
-                const SizedBox(height: 2),
-                Text(
-                  tab.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.body(
-                    fontSize: 11,
-                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w600,
-                    color: fgColor,
-                    height: 1.2,
+      child: TactilePressScale(
+        pressedScale: 0.94,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(24),
+            child: AnimatedContainer(
+              duration: duration,
+              curve: Curves.easeOutCubic,
+              constraints: const BoxConstraints(minHeight: 52, minWidth: 48),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              decoration: BoxDecoration(
+                color: isActive ? AppColors.yolkSoft : Colors.transparent,
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  AnimatedScale(
+                    scale: isActive && !disableAnimations ? 1.1 : 1.0,
+                    duration: duration,
+                    curve: Curves.easeOutBack,
+                    child: Icon(tabIconFor(tab.id), size: 20, color: fgColor),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 2),
+                  Text(
+                    tab.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.body(
+                      fontSize: 11,
+                      fontWeight: isActive ? FontWeight.w700 : FontWeight.w600,
+                      color: fgColor,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -669,29 +700,47 @@ class NotificationCenterSheet extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      unreadCount > 0
-                          ? '$unreadCount peringatan belum dibaca'
-                          : 'Semua notifikasi terbaca',
-                      style: AppTypography.body(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textSecondary,
+                    child: AnimatedSwitcher(
+                      duration: MediaQuery.disableAnimationsOf(context)
+                          ? Duration.zero
+                          : AppTokens.stateDuration,
+                      child: SizedBox(
+                        key: ValueKey(unreadCount),
+                        width: double.infinity,
+                        child: Text(
+                          unreadCount > 0
+                              ? '$unreadCount peringatan belum dibaca'
+                              : 'Semua notifikasi terbaca',
+                          style: AppTypography.body(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                  if (unreadCount > 0)
-                    TextButton(
-                      onPressed: onMarkAllRead,
-                      style: TextButton.styleFrom(
-                        minimumSize: const Size(48, 48),
-                        foregroundColor: AppColors.ink,
-                      ),
-                      child: const Text(
-                        'Tandai Semua',
-                        style: TextStyle(fontWeight: FontWeight.w700),
+                  AnimatedBadgePop(
+                    visible: unreadCount > 0,
+                    badgeKey: const ValueKey('mark_all_read_btn'),
+                    child: TactilePressScale(
+                      pressedScale: 0.94,
+                      child: TextButton(
+                        onPressed: () {
+                          HapticFeedback.lightImpact();
+                          onMarkAllRead();
+                        },
+                        style: TextButton.styleFrom(
+                          minimumSize: const Size(48, 48),
+                          foregroundColor: AppColors.ink,
+                        ),
+                        child: const Text(
+                          'Tandai Semua',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
                       ),
                     ),
+                  ),
                 ],
               ),
               const SizedBox(height: 6),
@@ -810,7 +859,10 @@ class _SyncStatusCard extends StatelessWidget {
           : 'Online · SQLite & Firebase tersinkron';
     }
 
-    return Container(
+    final disableMotion = MediaQuery.disableAnimationsOf(context);
+    return AnimatedContainer(
+      duration: disableMotion ? Duration.zero : AppTokens.stateDuration,
+      curve: Curves.easeOutCubic,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: bg,
@@ -818,17 +870,29 @@ class _SyncStatusCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(icon, size: 20, color: fg),
+          RotatingSyncIcon(
+            isSpinning: busy,
+            icon: icon,
+            size: 20,
+            color: fg,
+          ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              label,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: AppTypography.body(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-                color: fg,
+            child: AnimatedSwitcher(
+              duration: disableMotion ? Duration.zero : AppTokens.microDuration,
+              child: SizedBox(
+                key: ValueKey(label),
+                width: double.infinity,
+                child: Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.body(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: fg,
+                  ),
+                ),
               ),
             ),
           ),
@@ -836,18 +900,33 @@ class _SyncStatusCard extends StatelessWidget {
           Semantics(
             button: true,
             label: 'Sinkron sekarang',
-            child: TextButton(
-              onPressed: busy ? null : onTriggerSync,
-              style: TextButton.styleFrom(
-                minimumSize: const Size(48, 48),
-                foregroundColor: fg,
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-              ),
-              child: Text(
-                busy ? 'Proses...' : 'Sinkron',
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w800,
+            child: TactilePressScale(
+              enabled: !busy,
+              pressedScale: 0.93,
+              child: TextButton(
+                onPressed: busy
+                    ? null
+                    : () {
+                        HapticFeedback.lightImpact();
+                        onTriggerSync();
+                      },
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(48, 48),
+                  foregroundColor: fg,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                ),
+                child: AnimatedSwitcher(
+                  duration: disableMotion
+                      ? Duration.zero
+                      : AppTokens.microDuration,
+                  child: Text(
+                    busy ? 'Proses...' : 'Sinkron',
+                    key: ValueKey(busy),
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -890,110 +969,138 @@ class _NotificationTile extends StatelessWidget {
         icon = Icons.info_rounded;
     }
 
+    final disableMotion = MediaQuery.disableAnimationsOf(context);
+
     return Semantics(
       button: true,
       label: '${item.title}. ${item.message}. ${item.isRead ? 'Sudah dibaca' : 'Belum dibaca'}',
-      child: Material(
-        color: cardBg,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(
-            color: item.isRead
-                ? AppColors.borderSubtle
-                : accent.withValues(alpha: 0.35),
+      child: TactilePressScale(
+        pressedScale: 0.985,
+        child: AnimatedContainer(
+          duration: disableMotion ? Duration.zero : AppTokens.stateDuration,
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            color: cardBg,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: item.isRead
+                  ? AppColors.borderSubtle
+                  : accent.withValues(alpha: 0.35),
+            ),
           ),
-        ),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(14),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 56),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Icon(icon, size: 22, color: accent),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                onTap();
+              },
+              borderRadius: BorderRadius.circular(14),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 56),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Icon(icon, size: 22, color: accent),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(
-                              child: Text(
-                                item.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppTypography.heading(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.textPrimary,
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    item.title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppTypography.heading(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.textPrimary,
+                                    ),
+                                  ),
                                 ),
+                                AnimatedBadgePop(
+                                  visible: !item.isRead,
+                                  badgeKey: ValueKey('notif_dot_${item.id}'),
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(left: 6),
+                                    child: Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: const BoxDecoration(
+                                        color: AppColors.danger,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              item.message,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTypography.body(
+                                fontSize: 12,
+                                color: AppColors.textSecondary,
                               ),
                             ),
-                            if (!item.isRead) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                  color: AppColors.danger,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                            ],
                           ],
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          item.message,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTypography.body(
-                            fontSize: 12,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (onRestock != null) ...[
-                    const SizedBox(width: 8),
-                    Semantics(
-                      button: true,
-                      label: 'Restock ${item.barangNama ?? ''}',
-                      child: Material(
-                        color: AppColors.danger,
-                        borderRadius: BorderRadius.circular(10),
-                        child: InkWell(
-                          onTap: onRestock,
-                          borderRadius: BorderRadius.circular(10),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(
-                              minWidth: 64,
-                              minHeight: 48,
-                            ),
-                            child: const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 10),
-                              child: Center(
-                                child: Text(
-                                  'Restock',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white,
+                      ),
+                      if (onRestock != null) ...[
+                        const SizedBox(width: 8),
+                        Semantics(
+                          button: true,
+                          label: 'Restock ${item.barangNama ?? ''}',
+                          child: TactilePressScale(
+                            pressedScale: 0.94,
+                            child: Material(
+                              color: AppColors.danger,
+                              borderRadius: BorderRadius.circular(10),
+                              child: InkWell(
+                                onTap: () {
+                                  HapticFeedback.lightImpact();
+                                  onRestock!();
+                                },
+                                borderRadius: BorderRadius.circular(10),
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    minWidth: 64,
+                                    minHeight: 48,
+                                  ),
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        'Restock',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  ],
-                ],
+                      ],
+                    ],
+                  ),
+                ),
               ),
             ),
           ),

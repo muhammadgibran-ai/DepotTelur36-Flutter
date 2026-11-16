@@ -29,7 +29,7 @@ class DatabaseHelper {
   DatabaseHelper.forTesting({required this.customDbPath});
 
   static const String databaseName = 'depottelur36.db';
-  static const int databaseVersion = 3;
+  static const int databaseVersion = 4;
 
   String? customDbPath;
   Database? _database;
@@ -89,6 +89,21 @@ class DatabaseHelper {
             "remote_id IN ('seed-petugas-owner', 'seed-petugas-kasir-1') AND password_hash = ''",
       );
     }
+    if (oldVersion < 4) {
+      await _createPendingDeletesTable(db);
+    }
+  }
+
+  Future<void> _createPendingDeletesTable(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS pending_deletes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        table_name TEXT NOT NULL,
+        remote_id TEXT NOT NULL,
+        deleted_at TEXT NOT NULL,
+        UNIQUE(table_name, remote_id)
+      )
+    ''');
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -221,6 +236,8 @@ class DatabaseHelper {
     await db.execute('CREATE INDEX idx_faktur_sync ON faktur(sync_status)');
     await db.execute('CREATE INDEX idx_nota_sync ON nota(sync_status)');
 
+    await _createPendingDeletesTable(db);
+
     await _seedInitialData(db);
   }
 
@@ -337,7 +354,49 @@ class DatabaseHelper {
       );
       total += Sqflite.firstIntValue(result) ?? 0;
     }
+    final deleteResult = await db.rawQuery(
+      'SELECT COUNT(*) AS cnt FROM pending_deletes',
+    );
+    total += Sqflite.firstIntValue(deleteResult) ?? 0;
     return total;
+  }
+
+  Future<List<({String tableName, String remoteId})>> getPendingDeletes() async {
+    final db = await database;
+    final rows = await db.query(
+      'pending_deletes',
+      orderBy: 'id ASC',
+    );
+    return rows
+        .map(
+          (row) => (
+            tableName: (row['table_name'] as String?) ?? '',
+            remoteId: (row['remote_id'] as String?) ?? '',
+          ),
+        )
+        .toList();
+  }
+
+  Future<bool> hasPendingDelete(String tableName, String remoteId) async {
+    if (remoteId.trim().isEmpty) return false;
+    final db = await database;
+    final rows = await db.query(
+      'pending_deletes',
+      columns: ['id'],
+      where: 'table_name = ? AND remote_id = ?',
+      whereArgs: [tableName, remoteId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<void> removePendingDelete(String tableName, String remoteId) async {
+    final db = await database;
+    await db.delete(
+      'pending_deletes',
+      where: 'table_name = ? AND remote_id = ?',
+      whereArgs: [tableName, remoteId],
+    );
   }
 
   // ==================== CRUD MASTER: BARANG ====================
@@ -360,17 +419,181 @@ class DatabaseHelper {
     return Barang.fromMap(rows.first);
   }
 
-  Future<int> upsertBarang(Barang barang) async {
-    final db = await database;
-    final existing = await getBarangByRemoteId(barang.remoteId);
-    if (existing == null) {
-      return db.insert('barang', barang.toMap());
+  Future<int?> _resolveMasterUpdateId(
+    Transaction txn, {
+    required String tableName,
+    required String idColumn,
+    required int? localId,
+    required String remoteId,
+    required String entityLabel,
+  }) async {
+    final byRemoteRows = await txn.query(
+      tableName,
+      columns: [idColumn],
+      where: 'remote_id = ?',
+      whereArgs: [remoteId],
+      limit: 1,
+    );
+    final byRemoteId = byRemoteRows.isEmpty
+        ? null
+        : (byRemoteRows.first[idColumn] as num).toInt();
+
+    if (localId != null) {
+      final byPkRows = await txn.query(
+        tableName,
+        columns: [idColumn],
+        where: '$idColumn = ?',
+        whereArgs: [localId],
+        limit: 1,
+      );
+      if (byPkRows.isEmpty) {
+        throw StateError('$entityLabel tidak ditemukan di database lokal.');
+      }
+      if (byRemoteId != null && byRemoteId != localId) {
+        throw StateError(
+          'Data $entityLabel lokal tidak konsisten dengan ID remote.',
+        );
+      }
+      return localId;
     }
-    return db.update(
-      'barang',
-      barang.copyWith(idBarang: existing.idBarang).toMap(),
-      where: 'id_barang = ?',
-      whereArgs: [existing.idBarang],
+
+    return byRemoteId;
+  }
+
+  Future<int> _upsertSimpleMaster({
+    required String tableName,
+    required String idColumn,
+    required String entityLabel,
+    required int? localId,
+    required String remoteId,
+    required Map<String, Object?> Function(int? resolvedId) buildMap,
+  }) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      final idMatch = await _resolveMasterUpdateId(
+        txn,
+        tableName: tableName,
+        idColumn: idColumn,
+        localId: localId,
+        remoteId: remoteId,
+        entityLabel: entityLabel,
+      );
+      await _clearPendingDelete(txn, tableName, remoteId);
+      if (idMatch == null) {
+        return txn.insert(tableName, buildMap(null));
+      }
+      return txn.update(
+        tableName,
+        buildMap(idMatch),
+        where: '$idColumn = ?',
+        whereArgs: [idMatch],
+      );
+    });
+  }
+
+  Future<int> upsertBarang(Barang barang) {
+    return _upsertSimpleMaster(
+      tableName: 'barang',
+      idColumn: 'id_barang',
+      entityLabel: 'Barang',
+      localId: barang.idBarang,
+      remoteId: barang.remoteId,
+      buildMap: (resolvedId) => resolvedId == null
+          ? barang.toMap()
+          : barang.copyWith(idBarang: resolvedId).toMap(),
+    );
+  }
+
+  Future<void> updateBarangHargaBatch(Map<int, double> hargaById) async {
+    if (hargaById.isEmpty) return;
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    await db.transaction((txn) async {
+      for (final entry in hargaById.entries) {
+        final updatedRows = await txn.update(
+          'barang',
+          {
+            'harga_satuan': entry.value,
+            'sync_status': SyncStatus.pending.value,
+            'updated_at': now,
+          },
+          where: 'id_barang = ?',
+          whereArgs: [entry.key],
+        );
+        if (updatedRows == 0) {
+          throw StateError(
+            'Barang dengan ID ${entry.key} tidak ditemukan saat memperbarui harga.',
+          );
+        }
+      }
+    });
+  }
+
+  Future<void> deleteBarang(int idBarang) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'barang',
+        columns: ['remote_id'],
+        where: 'id_barang = ?',
+        whereArgs: [idBarang],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        throw StateError('Barang tidak ditemukan atau sudah dihapus.');
+      }
+      final refFaktur = Sqflite.firstIntValue(
+            await txn.rawQuery(
+              'SELECT COUNT(*) FROM detail_faktur WHERE id_barang = ?',
+              [idBarang],
+            ),
+          ) ??
+          0;
+      final refNota = Sqflite.firstIntValue(
+            await txn.rawQuery(
+              'SELECT COUNT(*) FROM detail_nota WHERE id_barang = ?',
+              [idBarang],
+            ),
+          ) ??
+          0;
+      if (refFaktur > 0 || refNota > 0) {
+        throw StateError(
+          'Barang tidak dapat dihapus karena masih tercatat pada transaksi Faktur/Nota.',
+        );
+      }
+      final remoteId = (rows.first['remote_id'] as String?) ?? '';
+      await _recordPendingDelete(txn, 'barang', remoteId);
+      await txn.delete('barang', where: 'id_barang = ?', whereArgs: [idBarang]);
+    });
+  }
+
+  Future<void> _recordPendingDelete(
+    DatabaseExecutor db,
+    String tableName,
+    String remoteId,
+  ) async {
+    if (remoteId.trim().isEmpty) return;
+    await db.insert(
+      'pending_deletes',
+      {
+        'table_name': tableName,
+        'remote_id': remoteId,
+        'deleted_at': DateTime.now().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> _clearPendingDelete(
+    DatabaseExecutor db,
+    String tableName,
+    String remoteId,
+  ) async {
+    if (remoteId.trim().isEmpty) return;
+    await db.delete(
+      'pending_deletes',
+      where: 'table_name = ? AND remote_id = ?',
+      whereArgs: [tableName, remoteId],
     );
   }
 
@@ -394,18 +617,52 @@ class DatabaseHelper {
     return Supplier.fromMap(rows.first);
   }
 
-  Future<int> upsertSupplier(Supplier supplier) async {
-    final db = await database;
-    final existing = await getSupplierByRemoteId(supplier.remoteId);
-    if (existing == null) {
-      return db.insert('supplier', supplier.toMap());
-    }
-    return db.update(
-      'supplier',
-      supplier.copyWith(idSupplier: existing.idSupplier).toMap(),
-      where: 'id_supplier = ?',
-      whereArgs: [existing.idSupplier],
+  Future<int> upsertSupplier(Supplier supplier) {
+    return _upsertSimpleMaster(
+      tableName: 'supplier',
+      idColumn: 'id_supplier',
+      entityLabel: 'Supplier',
+      localId: supplier.idSupplier,
+      remoteId: supplier.remoteId,
+      buildMap: (resolvedId) => resolvedId == null
+          ? supplier.toMap()
+          : supplier.copyWith(idSupplier: resolvedId).toMap(),
     );
+  }
+
+  Future<void> deleteSupplier(int idSupplier) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'supplier',
+        columns: ['remote_id'],
+        where: 'id_supplier = ?',
+        whereArgs: [idSupplier],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        throw StateError('Supplier tidak ditemukan atau sudah dihapus.');
+      }
+      final refFaktur = Sqflite.firstIntValue(
+            await txn.rawQuery(
+              'SELECT COUNT(*) FROM faktur WHERE id_supplier = ?',
+              [idSupplier],
+            ),
+          ) ??
+          0;
+      if (refFaktur > 0) {
+        throw StateError(
+          'Supplier tidak dapat dihapus karena masih memiliki riwayat Faktur masuk.',
+        );
+      }
+      final remoteId = (rows.first['remote_id'] as String?) ?? '';
+      await _recordPendingDelete(txn, 'supplier', remoteId);
+      await txn.delete(
+        'supplier',
+        where: 'id_supplier = ?',
+        whereArgs: [idSupplier],
+      );
+    });
   }
 
   // ==================== CRUD MASTER: CUSTOMER ====================
@@ -428,18 +685,52 @@ class DatabaseHelper {
     return Customer.fromMap(rows.first);
   }
 
-  Future<int> upsertCustomer(Customer customer) async {
-    final db = await database;
-    final existing = await getCustomerByRemoteId(customer.remoteId);
-    if (existing == null) {
-      return db.insert('customer', customer.toMap());
-    }
-    return db.update(
-      'customer',
-      customer.copyWith(idCustomer: existing.idCustomer).toMap(),
-      where: 'id_customer = ?',
-      whereArgs: [existing.idCustomer],
+  Future<int> upsertCustomer(Customer customer) {
+    return _upsertSimpleMaster(
+      tableName: 'customer',
+      idColumn: 'id_customer',
+      entityLabel: 'Pelanggan',
+      localId: customer.idCustomer,
+      remoteId: customer.remoteId,
+      buildMap: (resolvedId) => resolvedId == null
+          ? customer.toMap()
+          : customer.copyWith(idCustomer: resolvedId).toMap(),
     );
+  }
+
+  Future<void> deleteCustomer(int idCustomer) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'customer',
+        columns: ['remote_id'],
+        where: 'id_customer = ?',
+        whereArgs: [idCustomer],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        throw StateError('Pelanggan tidak ditemukan atau sudah dihapus.');
+      }
+      final refNota = Sqflite.firstIntValue(
+            await txn.rawQuery(
+              'SELECT COUNT(*) FROM nota WHERE id_customer = ?',
+              [idCustomer],
+            ),
+          ) ??
+          0;
+      if (refNota > 0) {
+        throw StateError(
+          'Pelanggan tidak dapat dihapus karena masih tercatat pada riwayat Nota.',
+        );
+      }
+      final remoteId = (rows.first['remote_id'] as String?) ?? '';
+      await _recordPendingDelete(txn, 'customer', remoteId);
+      await txn.delete(
+        'customer',
+        where: 'id_customer = ?',
+        whereArgs: [idCustomer],
+      );
+    });
   }
 
   // ==================== CRUD MASTER: PETUGAS ====================
@@ -492,28 +783,130 @@ class DatabaseHelper {
 
   Future<int> upsertPetugas(Petugas petugas) async {
     final db = await database;
-    var existing = await getPetugasByRemoteId(petugas.remoteId);
-    existing ??= petugas.email.trim().isNotEmpty
-        ? await getPetugasByEmail(petugas.email)
-        : null;
-    if (existing == null) {
-      return db.insert('petugas', petugas.toMap());
-    }
-    final merged = petugas.copyWith(
-      idPetugas: existing.idPetugas,
-      email: petugas.email.isEmpty ? existing.email : petugas.email,
-      accountId:
-          petugas.accountId.isEmpty ? existing.accountId : petugas.accountId,
-      passwordHash: petugas.passwordHash.isEmpty
-          ? existing.passwordHash
-          : petugas.passwordHash,
-    );
-    return db.update(
-      'petugas',
-      merged.toMap(),
-      where: 'id_petugas = ?',
-      whereArgs: [existing.idPetugas],
-    );
+    return db.transaction((txn) async {
+      final byRemoteRows = await txn.query(
+        'petugas',
+        where: 'remote_id = ?',
+        whereArgs: [petugas.remoteId],
+        limit: 1,
+      );
+      final byRemote =
+          byRemoteRows.isEmpty ? null : Petugas.fromMap(byRemoteRows.first);
+
+      final normalizedEmail = petugas.email.trim().toLowerCase();
+      Petugas? byEmail;
+      if (normalizedEmail.isNotEmpty) {
+        final byEmailRows = await txn.query(
+          'petugas',
+          where: 'LOWER(email) = ?',
+          whereArgs: [normalizedEmail],
+          limit: 1,
+        );
+        if (byEmailRows.isNotEmpty) {
+          byEmail = Petugas.fromMap(byEmailRows.first);
+        }
+      }
+
+      Petugas? existing;
+      if (petugas.idPetugas != null) {
+        final byPkRows = await txn.query(
+          'petugas',
+          where: 'id_petugas = ?',
+          whereArgs: [petugas.idPetugas],
+          limit: 1,
+        );
+        if (byPkRows.isEmpty) {
+          throw StateError('Petugas tidak ditemukan di database lokal.');
+        }
+        final byPk = Petugas.fromMap(byPkRows.first);
+        if (byRemote != null && byRemote.idPetugas != byPk.idPetugas) {
+          throw StateError(
+            'Data Petugas lokal tidak konsisten dengan ID remote.',
+          );
+        }
+        if (byEmail != null && byEmail.idPetugas != byPk.idPetugas) {
+          throw StateError(
+            'Email "$normalizedEmail" sudah digunakan oleh akun lain.',
+          );
+        }
+        existing = byPk;
+      } else {
+        existing = byRemote ?? byEmail;
+      }
+
+      await _clearPendingDelete(txn, 'petugas', petugas.remoteId);
+
+      if (existing == null) {
+        return txn.insert('petugas', petugas.toMap());
+      }
+      final merged = petugas.copyWith(
+        idPetugas: existing.idPetugas,
+        email: petugas.email.isEmpty ? existing.email : petugas.email,
+        accountId:
+            petugas.accountId.isEmpty ? existing.accountId : petugas.accountId,
+        passwordHash: petugas.passwordHash.isEmpty
+            ? existing.passwordHash
+            : petugas.passwordHash,
+      );
+      return txn.update(
+        'petugas',
+        merged.toMap(),
+        where: 'id_petugas = ?',
+        whereArgs: [existing.idPetugas],
+      );
+    });
+  }
+
+  Future<void> deletePetugas(int idPetugas) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'petugas',
+        where: 'id_petugas = ?',
+        whereArgs: [idPetugas],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        throw StateError('Akun petugas tidak ditemukan atau sudah dihapus.');
+      }
+      final target = Petugas.fromMap(rows.first);
+      if (target.role == UserRole.owner) {
+        final ownerCount = Sqflite.firstIntValue(
+              await txn.rawQuery(
+                "SELECT COUNT(*) FROM petugas WHERE role = 'OWNER'",
+              ),
+            ) ??
+            0;
+        if (ownerCount <= 1) {
+          throw StateError('Akun Owner terakhir tidak dapat dihapus.');
+        }
+      }
+      final refFaktur = Sqflite.firstIntValue(
+            await txn.rawQuery(
+              'SELECT COUNT(*) FROM faktur WHERE id_petugas = ?',
+              [idPetugas],
+            ),
+          ) ??
+          0;
+      final refNota = Sqflite.firstIntValue(
+            await txn.rawQuery(
+              'SELECT COUNT(*) FROM nota WHERE id_petugas = ?',
+              [idPetugas],
+            ),
+          ) ??
+          0;
+      if (refFaktur > 0 || refNota > 0) {
+        throw StateError(
+          'Petugas tidak dapat dihapus karena masih tercatat pada transaksi Faktur/Nota.',
+        );
+      }
+      await _recordPendingDelete(txn, 'petugas', target.remoteId);
+      await txn.delete(
+        'petugas',
+        where: 'id_petugas = ?',
+        whereArgs: [idPetugas],
+      );
+    });
   }
 
   // ==================== TRANSAKSI ATOMIK: FAKTUR & NOTA ====================
@@ -751,6 +1144,7 @@ class DatabaseHelper {
   }
 
   Future<void> applyCloudSupplier(Supplier cloudSupplier) async {
+    if (await hasPendingDelete('supplier', cloudSupplier.remoteId)) return;
     final existing = await getSupplierByRemoteId(cloudSupplier.remoteId);
     if (existing != null && existing.syncStatus == SyncStatus.pending) {
       return;
@@ -759,6 +1153,7 @@ class DatabaseHelper {
   }
 
   Future<void> applyCloudPetugas(Petugas cloudPetugas) async {
+    if (await hasPendingDelete('petugas', cloudPetugas.remoteId)) return;
     final existing = await getPetugasByRemoteId(cloudPetugas.remoteId);
     if (existing != null && existing.syncStatus == SyncStatus.pending) {
       return;
@@ -767,6 +1162,7 @@ class DatabaseHelper {
   }
 
   Future<void> applyCloudCustomer(Customer cloudCustomer) async {
+    if (await hasPendingDelete('customer', cloudCustomer.remoteId)) return;
     final existing = await getCustomerByRemoteId(cloudCustomer.remoteId);
     if (existing != null && existing.syncStatus == SyncStatus.pending) {
       return;
@@ -775,6 +1171,7 @@ class DatabaseHelper {
   }
 
   Future<void> applyCloudBarang(Barang cloudBarang) async {
+    if (await hasPendingDelete('barang', cloudBarang.remoteId)) return;
     final existing = await getBarangByRemoteId(cloudBarang.remoteId);
     if (existing == null) {
       await upsertBarang(cloudBarang.copyWith(syncStatus: SyncStatus.synced));
