@@ -7,6 +7,9 @@ const int kLowStockThreshold = 10;
 /// Threshold pantauan stok menjelang menipis untuk notifikasi dini.
 const int kWatchStockThreshold = 20;
 
+/// Threshold pantauan layar `22 Stok Menipis` sesuai desain Pendev (`≤ 25`).
+const int kWatchMonitorThreshold = 25;
+
 /// Batas maksimum panjang query pencarian agar aman dari input berlebihan.
 const int kMaxSearchQueryLength = 80;
 

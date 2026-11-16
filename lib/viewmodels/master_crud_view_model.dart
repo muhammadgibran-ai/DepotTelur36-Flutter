@@ -353,11 +353,14 @@ class MasterCrudViewModel extends ChangeNotifier {
     required this._session,
     required this._dataSource,
   }) {
-    _dataSub = _dataSource.onDataChanged.listen((_) {
-      if (!_isSaving) {
-        loadData(silent: true);
-      }
-    });
+    _dataSub = _dataSource.onDataChanged.listen(
+      (_) {
+        if (!_isSaving) {
+          loadData(silent: true);
+        }
+      },
+      onError: (_) {},
+    );
   }
 
   factory MasterCrudViewModel.fromRepository({
@@ -514,10 +517,15 @@ class MasterCrudViewModel extends ChangeNotifier {
       return;
     }
     final roleChanged = _session.role != nextSession.role;
+    final uidChanged = _session.uid != nextSession.uid;
     _session = nextSession;
     _accessDeniedMessage = null;
     _errorMessage = null;
-    if (!categories.contains(_activeCategory)) {
+    if (uidChanged) {
+      _searchQuery = '';
+      _priceFilter = PriceFilterCategory.semua;
+      _activeCategory = MasterCategory.barang;
+    } else if (!categories.contains(_activeCategory)) {
       _activeCategory = MasterCategory.barang;
     }
     if (!isOwner) {

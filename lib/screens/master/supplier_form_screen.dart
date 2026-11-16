@@ -52,6 +52,11 @@ class _SupplierFormScreenState extends State<SupplierFormScreen> {
       text: supplier?.alamatSupplier ?? '',
     );
     widget.viewModel.clearMessages();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+      }
+    });
   }
 
   @override

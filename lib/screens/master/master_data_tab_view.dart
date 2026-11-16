@@ -35,6 +35,7 @@ class MasterDataTabView extends StatefulWidget {
 
 class _MasterDataTabViewState extends State<MasterDataTabView> {
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _listScrollController = ScrollController();
   final TextEditingController _customerNameController = TextEditingController();
   final FocusNode _customerFocusNode = FocusNode();
   final GlobalKey _customerFormKey = GlobalKey();
@@ -67,6 +68,7 @@ class _MasterDataTabViewState extends State<MasterDataTabView> {
   void dispose() {
     _customerFocusNode.removeListener(_onCustomerFocusChanged);
     _searchController.dispose();
+    _listScrollController.dispose();
     _customerNameController.dispose();
     _customerFocusNode.dispose();
     super.dispose();
@@ -243,6 +245,20 @@ class _MasterDataTabViewState extends State<MasterDataTabView> {
               actionLabel: category.addButtonLabel,
               onAction: _handleAddPressed,
             ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: MasterCategoryTabBar(
+                categories: vm.categories,
+                activeCategory: category,
+                onSelected: (next) {
+                  setState(() => _successMessage = null);
+                  if (_listScrollController.hasClients) {
+                    _listScrollController.jumpTo(0);
+                  }
+                  vm.selectCategory(next);
+                },
+              ),
+            ),
             Expanded(
               child: RefreshIndicator(
                 color: AppColors.ink,
@@ -252,18 +268,10 @@ class _MasterDataTabViewState extends State<MasterDataTabView> {
                   await widget.onRefreshRequested?.call();
                 },
                 child: ListView(
+                  controller: _listScrollController,
                   physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 112),
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 112),
                   children: [
-                    MasterCategoryTabBar(
-                      categories: vm.categories,
-                      activeCategory: category,
-                      onSelected: (next) {
-                        setState(() => _successMessage = null);
-                        vm.selectCategory(next);
-                      },
-                    ),
-                    const SizedBox(height: 12),
                     MasterSearchField(
                       controller: _searchController,
                       hintText: category.searchHint,
@@ -302,6 +310,15 @@ class _MasterDataTabViewState extends State<MasterDataTabView> {
                           : AppTokens.stateDuration,
                       switchInCurve: AppTokens.arrivalCurve,
                       switchOutCurve: Curves.easeIn,
+                      layoutBuilder: (currentChild, previousChildren) {
+                        return Stack(
+                          alignment: Alignment.topCenter,
+                          children: [
+                            ...previousChildren,
+                            ?currentChild,
+                          ],
+                        );
+                      },
                       transitionBuilder: (child, animation) {
                         if (MediaQuery.disableAnimationsOf(context)) {
                           return FadeTransition(opacity: animation, child: child);

@@ -34,9 +34,10 @@ class RekapOmzetViewModel extends ChangeNotifier {
     required this._exportDirectory,
     required this._now,
   }) {
-    _subscription = _dataSource.onDataChanged.listen((_) {
-      unawaited(loadData(silent: true));
-    });
+    _subscription = _dataSource.onDataChanged.listen(
+      (_) => unawaited(loadData(silent: true)),
+      onError: (_) {},
+    );
   }
 
   factory RekapOmzetViewModel.fromRepository({

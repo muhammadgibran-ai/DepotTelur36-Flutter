@@ -107,6 +107,10 @@ class SyncService extends ChangeNotifier {
     return completer.future;
   }
 
+  /// Menunggu seluruh pekerjaan sinkronisasi berantai selesai (khusus pengujian).
+  @visibleForTesting
+  Future<void> flushPendingTasks() => _serialTail.catchError((_) {});
+
   /// Memulai pemantauan jaringan, auto-sync, dan realtime listener Firestore.
   Future<void> start() async {
     if (_isStarted) return;
@@ -420,8 +424,10 @@ class SyncService extends ChangeNotifier {
   ) {
     _listenCollection(collection, (snap) async {
       for (final doc in snap.docs) {
+        if (_disposed) return false;
         await applier(doc.data(), doc.id);
       }
+      if (_disposed) return false;
       final retried = await _retryDeferredCloudTransactions();
       return snap.docs.isNotEmpty || retried;
     });
@@ -444,10 +450,12 @@ class SyncService extends ChangeNotifier {
     }
     var inserted = false;
     for (final entry in snapshotEntries) {
+      if (_disposed) return inserted;
       if (await _dbHelper.hasPendingDelete(table, entry.key)) {
         deferredPool.remove(entry.key);
         continue;
       }
+      if (_disposed) return inserted;
       final ok = await inserter(remoteId: entry.key, data: entry.value);
       if (ok) {
         inserted = true;

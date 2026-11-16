@@ -65,6 +65,11 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
           BarangPhotoPresets.customAssetsListenable.value[barang.remoteId];
     }
     widget.viewModel.clearMessages();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+      }
+    });
   }
 
   @override

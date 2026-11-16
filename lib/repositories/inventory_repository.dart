@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:uuid/uuid.dart';
 
 import 'package:depot_telur_36/core/database/database_helper.dart';
+import 'package:depot_telur_36/core/utils/password_hasher.dart';
 import 'package:depot_telur_36/models/barang.dart';
 import 'package:depot_telur_36/models/customer.dart';
 import 'package:depot_telur_36/models/petugas.dart';
@@ -534,7 +535,10 @@ class InventoryRepository {
     final resolvedAccountId = accountId.trim().isNotEmpty
         ? accountId.trim()
         : (targetExisting?.accountId ?? '');
-    final resolvedPasswordHash = targetExisting?.passwordHash ?? '';
+    final existingHash = targetExisting?.passwordHash ?? '';
+    final resolvedPasswordHash = existingHash.isNotEmpty
+        ? existingHash
+        : PasswordHasher.hashPassword(cleanPin);
 
     final petugas = Petugas(
       idPetugas: targetExisting?.idPetugas ?? idPetugas,

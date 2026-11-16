@@ -136,16 +136,6 @@ class _FakturMasukViewState extends State<FakturMasukView> {
     if (!mounted) return;
     if (idFaktur != null) {
       await widget.onTransactionSaved?.call();
-      if (!mounted) return;
-      if (!widget.embedded) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(
-              content: Text('Faktur stok masuk berhasil disimpan.'),
-            ),
-          );
-      }
     }
   }
 

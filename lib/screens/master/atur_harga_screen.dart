@@ -35,6 +35,11 @@ class _AturHargaScreenState extends State<AturHargaScreen> {
     widget.viewModel.clearMessages();
     widget.viewModel.setPriceFilter(PriceFilterCategory.semua);
     _syncControllers(widget.viewModel.allBarang);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+      }
+    });
   }
 
   @override
@@ -361,6 +366,37 @@ class _AturHargaScreenState extends State<AturHargaScreen> {
                 title: 'Atur Harga Jual',
                 subtitle: 'Perbarui harga satuan untuk transaksi kasir',
               ),
+              SoftAnimatedReveal(
+                visible: activeError != null,
+                child: activeError != null
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                        child: MasterFeedbackBanner(
+                          key: ValueKey(activeError),
+                          message: activeError,
+                          onDismiss: () {
+                            setState(() => _localError = null);
+                            vm.clearMessages();
+                          },
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              SoftAnimatedReveal(
+                visible: _successMessage != null,
+                child: _successMessage != null
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                        child: MasterFeedbackBanner(
+                          key: ValueKey(_successMessage!),
+                          message: _successMessage!,
+                          isError: false,
+                          onDismiss: () =>
+                              setState(() => _successMessage = null),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
               Expanded(
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
@@ -376,37 +412,6 @@ class _AturHargaScreenState extends State<AturHargaScreen> {
                     ),
                     const SizedBox(height: 12),
                     _buildFilterRow(vm),
-                    SoftAnimatedReveal(
-                      visible: activeError != null,
-                      child: activeError != null
-                          ? Padding(
-                              padding: const EdgeInsets.only(top: 12),
-                              child: MasterFeedbackBanner(
-                                key: ValueKey(activeError),
-                                message: activeError,
-                                onDismiss: () {
-                                  setState(() => _localError = null);
-                                  vm.clearMessages();
-                                },
-                              ),
-                            )
-                          : const SizedBox.shrink(),
-                    ),
-                    SoftAnimatedReveal(
-                      visible: _successMessage != null,
-                      child: _successMessage != null
-                          ? Padding(
-                              padding: const EdgeInsets.only(top: 12),
-                              child: MasterFeedbackBanner(
-                                key: ValueKey(_successMessage!),
-                                message: _successMessage!,
-                                isError: false,
-                                onDismiss: () =>
-                                    setState(() => _successMessage = null),
-                              ),
-                            )
-                          : const SizedBox.shrink(),
-                    ),
                     const SizedBox(height: 12),
                     if (visibleItems.isEmpty)
                       const MasterEmptyStateCard(

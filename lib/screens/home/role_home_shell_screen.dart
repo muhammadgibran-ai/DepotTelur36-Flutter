@@ -14,18 +14,22 @@ import 'package:depot_telur_36/screens/laporan/rekap_omzet_screen.dart';
 import 'package:depot_telur_36/screens/master/atur_harga_screen.dart';
 import 'package:depot_telur_36/screens/master/barang_form_screen.dart';
 import 'package:depot_telur_36/screens/master/master_data_tab_view.dart';
+import 'package:depot_telur_36/screens/stok/stok_menipis_screen.dart';
 import 'package:depot_telur_36/screens/transaksi/faktur_masuk_screen.dart';
 import 'package:depot_telur_36/screens/transaksi/kasir_nota_screen.dart';
 import 'package:depot_telur_36/screens/transaksi/riwayat_faktur_screen.dart';
 import 'package:depot_telur_36/screens/transaksi/riwayat_nota_screen.dart';
+import 'package:depot_telur_36/models/restock_monitor_models.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/viewmodels/dashboard_view_model.dart';
 import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
 import 'package:depot_telur_36/viewmodels/rekap_omzet_view_model.dart';
+import 'package:depot_telur_36/viewmodels/restock_monitor_view_model.dart';
 import 'package:depot_telur_36/viewmodels/transaction_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
 import 'package:depot_telur_36/widgets/dashboard_widgets.dart';
+import 'package:depot_telur_36/widgets/restock_monitor_widgets.dart';
 import 'package:depot_telur_36/widgets/ux_motion_widgets.dart';
 
 /// Navigasi terpusat pasca-login menuju Dashboard Beranda RBAC sesuai [session].
@@ -62,6 +66,7 @@ class RoleHomeShellScreen extends StatefulWidget {
     this.masterViewModelOverride,
     this.transactionViewModelOverride,
     this.rekapViewModelOverride,
+    this.restockViewModelOverride,
   });
 
   final AuthSession initialSession;
@@ -69,6 +74,7 @@ class RoleHomeShellScreen extends StatefulWidget {
   final MasterCrudViewModel? masterViewModelOverride;
   final TransactionCrudViewModel? transactionViewModelOverride;
   final RekapOmzetViewModel? rekapViewModelOverride;
+  final RestockMonitorViewModel? restockViewModelOverride;
 
   @override
   State<RoleHomeShellScreen> createState() => _RoleHomeShellScreenState();
@@ -79,6 +85,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
   MasterCrudViewModel? _ownedMasterViewModel;
   TransactionCrudViewModel? _ownedTransactionViewModel;
   RekapOmzetViewModel? _ownedRekapViewModel;
+  RestockMonitorViewModel? _ownedRestockViewModel;
   DashboardViewModel? _bridgeListenedVm;
   DashboardViewModel? _tabTrackedVm;
   DashboardTabId? _lastTrackedTab;
@@ -93,6 +100,8 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
       widget.transactionViewModelOverride ?? _ownedTransactionViewModel!;
   RekapOmzetViewModel get _rekapVm =>
       widget.rekapViewModelOverride ?? _ownedRekapViewModel!;
+  RestockMonitorViewModel get _restockVm =>
+      widget.restockViewModelOverride ?? _ownedRestockViewModel!;
 
   @override
   void initState() {
@@ -163,6 +172,22 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
         unawaited(_ownedRekapViewModel!.loadData(silent: true));
       }
     }
+    if (widget.restockViewModelOverride == null) {
+      if (repo != null) {
+        _ownedRestockViewModel = RestockMonitorViewModel.fromRepository(
+          session: widget.initialSession,
+          repository: repo,
+        );
+        unawaited(_ownedRestockViewModel!.loadData());
+      } else {
+        _ownedRestockViewModel = RestockMonitorViewModel(
+          session: widget.initialSession,
+          dataSource: ReadOnlyTransactionBridgeDataSource(_vm),
+        );
+        _bridgeListenedVm ??= _vm..addListener(_onBridgeDashboardChanged);
+        unawaited(_ownedRestockViewModel!.loadData(silent: true));
+      }
+    }
     _attachTabTracker(_vm);
   }
 
@@ -201,6 +226,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     if (rekapVm != null && mounted) {
       unawaited(rekapVm.loadData(silent: true));
     }
+    final restockVm = _ownedRestockViewModel;
+    if (restockVm != null && mounted) {
+      unawaited(restockVm.loadData(silent: true));
+    }
   }
 
   void _onSearchFocusChanged() {
@@ -225,6 +254,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     if (_ownedRekapViewModel != null &&
         oldWidget.initialSession != widget.initialSession) {
       _ownedRekapViewModel!.updateSession(widget.initialSession);
+    }
+    if (_ownedRestockViewModel != null &&
+        oldWidget.initialSession != widget.initialSession) {
+      _ownedRestockViewModel!.updateSession(widget.initialSession);
     }
     if (widget.viewModelOverride != null &&
         widget.viewModelOverride != oldWidget.viewModelOverride) {
@@ -263,6 +296,16 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
           );
           unawaited(_ownedRekapViewModel!.loadData(silent: true));
         }
+        if (_ownedRestockViewModel != null) {
+          _ownedRestockViewModel!.dispose();
+          _ownedRestockViewModel = RestockMonitorViewModel(
+            session: widget.initialSession,
+            dataSource: ReadOnlyTransactionBridgeDataSource(
+              widget.viewModelOverride!,
+            ),
+          );
+          unawaited(_ownedRestockViewModel!.loadData(silent: true));
+        }
         _bridgeListenedVm = widget.viewModelOverride!
           ..addListener(_onBridgeDashboardChanged);
       }
@@ -279,6 +322,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
       _ownedMasterViewModel?.updateSession(authSession);
       _ownedTransactionViewModel?.updateSession(authSession);
       _ownedRekapViewModel?.updateSession(authSession);
+      _ownedRestockViewModel?.updateSession(authSession);
     }
   }
 
@@ -289,6 +333,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     _searchFocusNode.removeListener(_onSearchFocusChanged);
     _searchFocusNode.dispose();
     _searchController.dispose();
+    _ownedRestockViewModel?.dispose();
     _ownedRekapViewModel?.dispose();
     _ownedTransactionViewModel?.dispose();
     _ownedMasterViewModel?.dispose();
@@ -327,10 +372,69 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
   void _handleRestockRequested(String itemName, int stock, String unit) {
     _transactionVm.prefillFakturRestock(itemName);
     if (!_vm.isOwner) {
-      _vm.selectTab(DashboardTabId.faktur);
-      _showFeedbackSnack(
+      _transactionVm.showRestockInfoBanner(
         'Siap restock $itemName (sisa $stock $unit) melalui modul Faktur masuk.',
       );
+      _vm.selectTab(DashboardTabId.faktur);
+      return;
+    }
+    Navigator.of(context).push<void>(
+      buildAuthRoute<void>(
+        FakturMasukScreen(
+          viewModel: _transactionVm,
+          onTransactionSaved: _vm.loadDashboardData,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openRestockMonitorScreen() async {
+    unawaited(_restockVm.loadData(silent: true));
+    await Navigator.of(context).push<void>(
+      buildAuthRoute<void>(
+        StokMenipisScreen(
+          viewModel: _restockVm,
+          onRefreshRequested: () async {
+            await Future.wait([
+              _vm.loadDashboardData(),
+              _restockVm.loadData(silent: true),
+            ]);
+          },
+          onStartRestockFaktur: _handleStartRestockFromMonitor,
+          onOpenEmptyFaktur: _handleOpenEmptyFakturFromMonitor,
+        ),
+      ),
+    );
+  }
+
+  void _handleStartRestockFromMonitor(RestockMonitorItem item) {
+    final preparedQty = _restockVm.prepareRestockDraft(
+      item,
+      transactionVm: _transactionVm,
+    );
+    if (preparedQty == null) return;
+    Navigator.of(context).pop();
+    if (!_vm.isOwner) {
+      _transactionVm.showRestockInfoBanner(
+        'Siap restock ${item.barang.namaBarang} (+$preparedQty ${item.barang.satuan}) ke Faktur masuk.',
+      );
+      _vm.selectTab(DashboardTabId.faktur);
+      return;
+    }
+    Navigator.of(context).push<void>(
+      buildAuthRoute<void>(
+        FakturMasukScreen(
+          viewModel: _transactionVm,
+          onTransactionSaved: _vm.loadDashboardData,
+        ),
+      ),
+    );
+  }
+
+  void _handleOpenEmptyFakturFromMonitor() {
+    Navigator.of(context).pop();
+    if (!_vm.isOwner) {
+      _vm.selectTab(DashboardTabId.faktur);
       return;
     }
     Navigator.of(context).push<void>(
@@ -441,6 +545,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
                   notif.currentStock ?? 0,
                   notif.satuan ?? 'Unit',
                 );
+              },
+              onOpenRestockMonitor: () {
+                Navigator.of(sheetContext).pop();
+                unawaited(_openRestockMonitorScreen());
               },
             );
           },
@@ -854,9 +962,22 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
           onReset: _handleResetSearchAndFilter,
         ),
       ] else ...[
+        ListenableBuilder(
+          listenable: _restockVm,
+          builder: (context, _) {
+            final snap = _restockVm.snapshot;
+            return RestockMonitorEntryBanner(
+              criticalCount: snap.criticalCount,
+              watchCount: snap.watchBandCount,
+              onTap: _openRestockMonitorScreen,
+            );
+          },
+        ),
+        const SizedBox(height: 10),
         for (final item in lowItems) ...[
           LowStockAlertCard(
             barang: item,
+            onCardTap: _openRestockMonitorScreen,
             onRestock: () => _handleRestockRequested(
               item.namaBarang,
               item.stokBarang,

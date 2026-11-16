@@ -1833,7 +1833,7 @@ void main() {
       addTearDown(vm2.dispose);
       vm2.prefillFakturRestock('ayam', defaultQty: 8);
       await vm2.loadData();
-      expect(vm2.fakturQtyFor(barang1), 12);
+      expect(vm2.fakturQtyFor(barang1), 8);
     });
 
     test('Validasi ViewModel & edge case: batas stok kasir, batas qty faktur 9.999.999, input kosong, concurrent load, re-entrancy, & ReadOnlyBridge', () async {

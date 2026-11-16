@@ -253,10 +253,12 @@ class LowStockAlertCard extends StatelessWidget {
     super.key,
     required this.barang,
     required this.onRestock,
+    this.onCardTap,
   });
 
   final Barang barang;
   final VoidCallback onRestock;
+  final VoidCallback? onCardTap;
 
   @override
   Widget build(BuildContext context) {
@@ -266,76 +268,89 @@ class LowStockAlertCard extends StatelessWidget {
         ? 'Sisa ${barang.stokBarang} ${barang.satuan} · Segera restock'
         : 'Sisa ${barang.stokBarang} ${barang.satuan} (Batas minimum $kLowStockThreshold)';
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.dangerBg,
+    return Material(
+      color: AppColors.dangerBg,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
+        side: BorderSide(
           color: const Color(0xFFFCA5A5).withValues(alpha: 0.65),
         ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          BarangThumbnail(barang: barang, size: 44, radius: 12),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '$prefix · ${barang.namaBarang}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.heading(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.danger,
-                    height: 1.3,
-                  ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onCardTap == null
+            ? null
+            : () {
+                HapticFeedback.selectionClick();
+                onCardTap!();
+              },
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              BarangThumbnail(barang: barang, size: 44, radius: 12),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$prefix · ${barang.namaBarang}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.heading(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.danger,
+                        height: 1.3,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtext,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.body(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.danger,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  subtext,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.body(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+              ),
+              const SizedBox(width: 10),
+              Semantics(
+                button: true,
+                label: 'Restock ${barang.namaBarang}',
+                child: TactilePressScale(
+                  pressedScale: 0.94,
+                  child: Material(
                     color: AppColors.danger,
-                    height: 1.35,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          Semantics(
-            button: true,
-            label: 'Restock ${barang.namaBarang}',
-            child: TactilePressScale(
-              pressedScale: 0.94,
-              child: Material(
-                color: AppColors.danger,
-                borderRadius: BorderRadius.circular(12),
-                child: InkWell(
-                  onTap: () {
-                    HapticFeedback.lightImpact();
-                    onRestock();
-                  },
-                  borderRadius: BorderRadius.circular(12),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 68, minHeight: 48),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 14),
-                      child: Center(
-                        child: Text(
-                          'Restock',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    child: InkWell(
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        onRestock();
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: ConstrainedBox(
+                        constraints:
+                            const BoxConstraints(minWidth: 68, minHeight: 48),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 14),
+                          child: Center(
+                            child: Text(
+                              'Restock',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -343,9 +358,9 @@ class LowStockAlertCard extends StatelessWidget {
                   ),
                 ),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -628,6 +643,7 @@ class NotificationCenterSheet extends StatelessWidget {
     required this.onMarkAllRead,
     required this.onTriggerSync,
     required this.onRestockItem,
+    this.onOpenRestockMonitor,
   });
 
   final List<AppNotificationItem> notifications;
@@ -639,16 +655,18 @@ class NotificationCenterSheet extends StatelessWidget {
   final VoidCallback onMarkAllRead;
   final VoidCallback onTriggerSync;
   final ValueChanged<AppNotificationItem> onRestockItem;
+  final VoidCallback? onOpenRestockMonitor;
 
   @override
   Widget build(BuildContext context) {
     final maxSheetHeight = MediaQuery.sizeOf(context).height * 0.84;
+    final listMaxHeight = (maxSheetHeight * 0.48).clamp(160.0, 320.0);
 
     return SafeArea(
       top: false,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxSheetHeight),
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -696,6 +714,37 @@ class NotificationCenterSheet extends StatelessWidget {
                 syncErrorMessage: syncErrorMessage,
                 onTriggerSync: onTriggerSync,
               ),
+              if (onOpenRestockMonitor != null) ...[
+                const SizedBox(height: 10),
+                TactilePressScale(
+                  pressedScale: 0.98,
+                  child: OutlinedButton.icon(
+                    key: const ValueKey('notif_open_restock_monitor_btn'),
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      onOpenRestockMonitor!();
+                    },
+                    icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                    label: const Text(
+                      'Buka Pemantauan Stok Menipis',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(48, 48),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      foregroundColor: AppColors.ink,
+                      backgroundColor: AppColors.surfaceWarm,
+                      side: const BorderSide(color: AppColors.borderSubtle),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 14),
               Row(
                 children: [
@@ -744,61 +793,63 @@ class NotificationCenterSheet extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 6),
-              Flexible(
-                child: notifications.isEmpty
-                    ? Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: AppColors.surfaceWarm,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: AppColors.borderSubtle),
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.verified_rounded,
-                              size: 36,
-                              color: AppColors.success,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Semua stok aman dan tersinkron',
-                              textAlign: TextAlign.center,
-                              style: AppTypography.heading(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Belum ada peringatan stok menipis atau antrean gagal.',
-                              textAlign: TextAlign.center,
-                              style: AppTypography.body(
-                                fontSize: 12.5,
-                                color: AppColors.textSecondary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    : ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: notifications.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final item = notifications[index];
-                          return _NotificationTile(
-                            item: item,
-                            onTap: () => onMarkRead(item.id),
-                            onRestock: item.isStockAlert
-                                ? () => onRestockItem(item)
-                                : null,
-                          );
-                        },
+              if (notifications.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceWarm,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.borderSubtle),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.verified_rounded,
+                        size: 36,
+                        color: AppColors.success,
                       ),
-              ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Semua stok aman dan tersinkron',
+                        textAlign: TextAlign.center,
+                        style: AppTypography.heading(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Belum ada peringatan stok menipis atau antrean gagal.',
+                        textAlign: TextAlign.center,
+                        style: AppTypography.body(
+                          fontSize: 12.5,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: listMaxHeight),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: notifications.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final item = notifications[index];
+                      return _NotificationTile(
+                        item: item,
+                        onTap: () => onMarkRead(item.id),
+                        onRestock: item.isStockAlert
+                            ? () => onRestockItem(item)
+                            : null,
+                      );
+                    },
+                  ),
+                ),
             ],
           ),
         ),

@@ -117,14 +117,6 @@ class _KasirNotaViewState extends State<KasirNotaView> {
     if (!mounted) return;
     if (idNota != null) {
       await widget.onTransactionSaved?.call();
-      if (!mounted) return;
-      if (!widget.embedded) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(content: Text('Nota #$idNota berhasil disimpan.')),
-          );
-      }
     }
   }
 

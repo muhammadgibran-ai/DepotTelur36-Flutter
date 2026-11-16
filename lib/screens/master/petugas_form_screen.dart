@@ -53,6 +53,11 @@ class _PetugasFormScreenState extends State<PetugasFormScreen> {
     _pinController = TextEditingController(text: petugas?.pin ?? '');
     _selectedRole = petugas?.role ?? UserRole.petugas;
     widget.viewModel.clearMessages();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+      }
+    });
   }
 
   @override

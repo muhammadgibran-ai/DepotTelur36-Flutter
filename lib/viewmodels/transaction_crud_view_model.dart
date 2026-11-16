@@ -327,9 +327,10 @@ class TransactionCrudViewModel extends ChangeNotifier {
     _selectedNotaDate = todayIso;
     _selectedFakturDate = todayIso;
     _noFakturInput = _fallbackNoFaktur(_now());
-    _subscription = _dataSource.onDataChanged.listen((_) {
-      unawaited(loadData(silent: true));
-    });
+    _subscription = _dataSource.onDataChanged.listen(
+      (_) => unawaited(loadData(silent: true)),
+      onError: (_) {},
+    );
   }
 
   factory TransactionCrudViewModel.fromRepository({
@@ -377,7 +378,12 @@ class TransactionCrudViewModel extends ChangeNotifier {
   int? _selectedFakturSupplierId;
   late String _selectedFakturDate;
   final Map<int, int> _fakturCart = <int, int>{};
+  int? _pendingRestockBarangId;
   String? _pendingRestockBarangName;
+  int _pendingRestockQty = 12;
+  bool _pendingRestockOverrideExisting = false;
+  int? _pendingRestockSupplierId;
+  String? _pendingRestockSupplierRemoteId;
 
   // Filter Riwayat Nota (Screen 16) & Riwayat Faktur (Screen 18)
   String _notaHistoryQuery = '';
@@ -610,7 +616,29 @@ class TransactionCrudViewModel extends ChangeNotifier {
 
   void updateSession(AuthSession nextSession) {
     if (_session == nextSession) return;
+    final uidChanged = nextSession.uid != _session.uid;
     _session = nextSession;
+    if (uidChanged) {
+      _kasirSearchQuery = '';
+      _kasirCart.clear();
+      _fakturCart.clear();
+      _noFakturEditedByUser = false;
+      _noFakturInput = _fallbackNoFaktur(_now());
+      _selectedNotaCustomerId = _firstValidCustomerId();
+      _selectedFakturSupplierId = _firstValidSupplierId();
+      _pendingRestockBarangId = null;
+      _pendingRestockBarangName = null;
+      _pendingRestockQty = 12;
+      _pendingRestockOverrideExisting = false;
+      _pendingRestockSupplierId = null;
+      _pendingRestockSupplierRemoteId = null;
+      _notaHistoryQuery = '';
+      _notaDateFilter = NotaHistoryDateFilter.semua;
+      _fakturHistoryQuery = '';
+      _fakturSupplierFilterRemoteId = null;
+      _errorMessage = null;
+      _successMessage = null;
+    }
     _notifySafely();
   }
 
@@ -665,6 +693,19 @@ class TransactionCrudViewModel extends ChangeNotifier {
         _findCustomer(_selectedNotaCustomerId) == null) {
       _selectedNotaCustomerId = _firstValidCustomerId();
     }
+    if (_suppliers.isNotEmpty &&
+        (_pendingRestockSupplierId != null ||
+            (_pendingRestockSupplierRemoteId ?? '').isNotEmpty)) {
+      final matchedSup = _matchSupplierByMeta(
+        supplierId: _pendingRestockSupplierId,
+        supplierRemoteId: _pendingRestockSupplierRemoteId,
+      );
+      _pendingRestockSupplierId = null;
+      _pendingRestockSupplierRemoteId = null;
+      if (matchedSup?.idSupplier != null) {
+        _selectedFakturSupplierId = matchedSup!.idSupplier;
+      }
+    }
     if (_selectedFakturSupplierId == null ||
         _findSupplier(_selectedFakturSupplierId) == null) {
       _selectedFakturSupplierId = _firstValidSupplierId();
@@ -691,10 +732,22 @@ class TransactionCrudViewModel extends ChangeNotifier {
     }
     _fakturCart.removeWhere((id, _) => !validBarangIds.contains(id));
 
-    if (_pendingRestockBarangName != null && _barangs.isNotEmpty) {
-      final pending = _pendingRestockBarangName!;
+    if ((_pendingRestockBarangName != null || _pendingRestockBarangId != null) &&
+        _barangs.isNotEmpty) {
+      final pendingName = _pendingRestockBarangName ?? '';
+      final pendingId = _pendingRestockBarangId;
+      final pendingQty = _pendingRestockQty;
+      final pendingOverride = _pendingRestockOverrideExisting;
+      _pendingRestockBarangId = null;
       _pendingRestockBarangName = null;
-      _applyRestockDraft(pending, defaultQty: 12);
+      _pendingRestockQty = 12;
+      _pendingRestockOverrideExisting = false;
+      _applyRestockDraft(
+        pendingName,
+        barangId: pendingId,
+        defaultQty: pendingQty,
+        overrideExisting: pendingOverride,
+      );
     }
   }
 
@@ -957,34 +1010,115 @@ class TransactionCrudViewModel extends ChangeNotifier {
     _notifySafely();
   }
 
-  /// Menyiapkan item restock otomatis ketika pengguna menekan tombol `Restock`.
-  void prefillFakturRestock(String barangName, {int defaultQty = 12}) {
-    if (barangName.trim().isEmpty) return;
-    if (_barangs.isEmpty) {
-      _pendingRestockBarangName = barangName;
-      return;
-    }
-    _applyRestockDraft(barangName, defaultQty: defaultQty);
+  /// Menampilkan pesan informasi pada banner transaksi (tidak menutupi CTA bawah).
+  void showRestockInfoBanner(String message) {
+    final clean = message.trim();
+    if (clean.isEmpty) return;
+    _errorMessage = null;
+    _successMessage = clean;
     _notifySafely();
   }
 
-  void _applyRestockDraft(String barangName, {required int defaultQty}) {
-    final key = barangName.trim().toLowerCase();
-    if (key.isEmpty) return;
-    Barang? match;
-    for (final b in _barangs) {
-      if (b.namaBarang.trim().toLowerCase() == key) {
-        match = b;
-        break;
+  /// Menyiapkan item restock otomatis ketika pengguna menekan tombol `Restock`.
+  void prefillFakturRestock(
+    String barangName, {
+    int? barangId,
+    int defaultQty = 12,
+    bool overrideExisting = false,
+    int? supplierId,
+    String? supplierRemoteId,
+  }) {
+    final trimmedName = barangName.trim();
+    if (trimmedName.isEmpty && (barangId == null || barangId <= 0)) return;
+    if (supplierId != null || (supplierRemoteId ?? '').trim().isNotEmpty) {
+      if (_suppliers.isEmpty) {
+        _pendingRestockSupplierId = supplierId;
+        _pendingRestockSupplierRemoteId = supplierRemoteId?.trim();
+      } else {
+        final matchedSup = _matchSupplierByMeta(
+          supplierId: supplierId,
+          supplierRemoteId: supplierRemoteId,
+        );
+        if (matchedSup?.idSupplier != null) {
+          _selectedFakturSupplierId = matchedSup!.idSupplier;
+        }
+      }
+    } else {
+      _pendingRestockSupplierId = null;
+      _pendingRestockSupplierRemoteId = null;
+    }
+    if (_barangs.isEmpty) {
+      _pendingRestockBarangId = barangId;
+      _pendingRestockBarangName = trimmedName;
+      _pendingRestockQty = defaultQty;
+      _pendingRestockOverrideExisting = overrideExisting;
+      return;
+    }
+    _applyRestockDraft(
+      trimmedName,
+      barangId: barangId,
+      defaultQty: defaultQty,
+      overrideExisting: overrideExisting,
+    );
+    _notifySafely();
+  }
+
+  Supplier? _matchSupplierByMeta({
+    int? supplierId,
+    String? supplierRemoteId,
+  }) {
+    final trimmedRemote = supplierRemoteId?.trim() ?? '';
+    if (trimmedRemote.isNotEmpty) {
+      for (final s in _suppliers) {
+        if (s.remoteId.trim() == trimmedRemote && s.idSupplier != null) {
+          return s;
+        }
       }
     }
-    match ??= _barangs.cast<Barang?>().firstWhere(
-          (b) => b!.namaBarang.trim().toLowerCase().contains(key),
-          orElse: () => null,
-        );
+    if (supplierId != null && supplierId > 0) {
+      for (final s in _suppliers) {
+        if (s.idSupplier == supplierId) {
+          return s;
+        }
+      }
+    }
+    return null;
+  }
+
+  void _applyRestockDraft(
+    String barangName, {
+    int? barangId,
+    required int defaultQty,
+    bool overrideExisting = false,
+  }) {
+    Barang? match;
+    if (barangId != null && barangId > 0) {
+      for (final b in _barangs) {
+        if (b.idBarang == barangId) {
+          match = b;
+          break;
+        }
+      }
+    }
+    final key = barangName.trim().toLowerCase();
+    if (match == null && key.isNotEmpty) {
+      for (final b in _barangs) {
+        if (b.namaBarang.trim().toLowerCase() == key) {
+          match = b;
+          break;
+        }
+      }
+      match ??= _barangs.cast<Barang?>().firstWhere(
+            (b) => b!.namaBarang.trim().toLowerCase().contains(key),
+            orElse: () => null,
+          );
+    }
     final id = match?.idBarang;
-    if (id != null && !_fakturCart.containsKey(id)) {
-      _fakturCart[id] = defaultQty > 0 ? defaultQty : 10;
+    if (id != null && (overrideExisting || !_fakturCart.containsKey(id))) {
+      final safeQty = defaultQty > 0
+          ? (defaultQty > _maxTransactionQty ? _maxTransactionQty : defaultQty)
+          : 10;
+      _fakturCart[id] = safeQty;
     }
   }
 

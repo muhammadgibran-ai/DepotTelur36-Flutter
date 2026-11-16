@@ -9,6 +9,7 @@ import 'package:depot_telur_36/main.dart';
 import 'package:depot_telur_36/models/auth_session.dart';
 import 'package:depot_telur_36/models/dashboard_models.dart';
 import 'package:depot_telur_36/models/petugas.dart';
+import 'package:depot_telur_36/models/restock_monitor_models.dart';
 import 'package:depot_telur_36/models/sync_status.dart';
 import 'package:depot_telur_36/repositories/auth_repository.dart';
 import 'package:depot_telur_36/repositories/inventory_repository.dart';
@@ -22,6 +23,7 @@ import 'package:depot_telur_36/screens/master/barang_form_screen.dart';
 import 'package:depot_telur_36/screens/master/master_data_tab_view.dart';
 import 'package:depot_telur_36/screens/master/petugas_form_screen.dart';
 import 'package:depot_telur_36/screens/master/supplier_form_screen.dart';
+import 'package:depot_telur_36/screens/stok/stok_menipis_screen.dart';
 import 'package:depot_telur_36/screens/transaksi/detail_faktur_screen.dart';
 import 'package:depot_telur_36/screens/transaksi/detail_nota_screen.dart';
 import 'package:depot_telur_36/screens/transaksi/faktur_masuk_screen.dart';
@@ -33,6 +35,7 @@ import 'package:depot_telur_36/services/sync_service.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
 import 'package:depot_telur_36/viewmodels/rekap_omzet_view_model.dart';
+import 'package:depot_telur_36/viewmodels/restock_monitor_view_model.dart';
 import 'package:depot_telur_36/viewmodels/transaction_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
@@ -1251,6 +1254,21 @@ void main() {
       addTearDown(rekapVm.dispose);
       await tester.runAsync(() => rekapVm.loadData());
       await auditScreen(tester, RekapOmzetScreen(viewModel: rekapVm));
+
+      final restockVm = RestockMonitorViewModel.fromRepository(
+        session: rekapOwnerSession,
+        repository: inventoryRepository,
+      );
+      addTearDown(restockVm.dispose);
+      await tester.runAsync(() => restockVm.loadData());
+      await auditScreen(
+        tester,
+        StokMenipisScreen(
+          viewModel: restockVm,
+          onStartRestockFaktur: (_) {},
+          onOpenEmptyFaktur: () {},
+        ),
+      );
     });
   });
 
@@ -2567,6 +2585,371 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Ekspor Laporan Omzet'), findsOneWidget);
         expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
+  group('Fungsi 6 - UI Pemantauan & Aksi Restok (Pendev 22)', () {
+    Future<void> flushAsyncUi(
+      WidgetTester tester, {
+      bool Function()? until,
+    }) async {
+      for (var i = 0; i < 12; i++) {
+        await tester.pump();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        if (until != null && until()) break;
+      }
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> scrollAndTap(WidgetTester tester, Finder finder) async {
+      await tester.ensureVisible(finder);
+      await tester.pumpAndSettle();
+      await tester.tap(finder);
+    }
+
+    testWidgets(
+      'Navigasi Beranda & Notifikasi ke Stok Menipis, switch filter, stepper micro-interaction & prefill Faktur',
+      (tester) async {
+        final ownerSession = AuthSession(
+          uid: 'ui-restock-owner',
+          email: 'owner.restock@depottelur36.com',
+          accountId: 'owner_restock',
+          displayName: 'Owner Restok',
+          role: UserRole.owner,
+          petugasRemoteId: 'restock-owner-remote',
+          provider: AuthProviderType.emailPassword,
+          signedInAt: DateTime(2026, 2, 18),
+        );
+
+        await tester.runAsync(() async {
+          await inventoryRepository.savePetugas(
+            existingRemoteId: 'restock-owner-remote',
+            namaPetugas: 'Owner Restok',
+            role: UserRole.owner,
+            pin: '1122',
+            email: 'owner.restock@depottelur36.com',
+          );
+          await inventoryRepository.saveBarang(
+            existingRemoteId: 'mon-crit-puyuh',
+            namaBarang: 'Telur Puyuh Kemasan',
+            hargaSatuan: 17500,
+            satuan: 'Pouch',
+            stokBarang: 1,
+          );
+          await inventoryRepository.saveBarang(
+            existingRemoteId: 'mon-watch-bebek',
+            namaBarang: 'Telur Bebek Asin',
+            hargaSatuan: 42000,
+            satuan: 'Tray',
+            stokBarang: 18,
+          );
+          await inventoryRepository.saveBarang(
+            existingRemoteId: 'mon-safe-jagung',
+            namaBarang: 'Pakan Jagung Halus',
+            hargaSatuan: 95000,
+            satuan: 'Sak',
+            stokBarang: 45,
+          );
+          await inventoryRepository.saveSupplier(
+            existingRemoteId: 'mon-sup-berkah',
+            namaSupplier: 'Berkah Sentosa',
+            noTelpSupplier: '081299900011',
+            alamatSupplier: 'Jl. Gudang Raya 9',
+          );
+          final crit = (await inventoryRepository.getAllBarang()).firstWhere(
+            (b) => b.remoteId == 'mon-crit-puyuh',
+          );
+          final supplier =
+              (await inventoryRepository.getAllSupplier()).firstWhere(
+            (s) => s.remoteId == 'mon-sup-berkah',
+          );
+          final petugas = (await inventoryRepository.getAllPetugas()).firstWhere(
+            (p) => p.remoteId == 'restock-owner-remote',
+          );
+          await inventoryRepository.createFaktur(
+            noFaktur: 'FKT-RST-01',
+            tanggalFaktur: '2026-02-15',
+            supplier: supplier,
+            petugas: petugas,
+            items: [(barang: crit, quantity: 5)],
+          );
+        });
+
+        await tester.pumpWidget(
+          Provider<InventoryRepository>.value(
+            value: inventoryRepository,
+            child: MaterialApp(
+              theme: AppTheme.light(),
+              home: RoleHomeShellScreen(initialSession: ownerSession),
+            ),
+          ),
+        );
+        await flushAsyncUi(
+          tester,
+          until: () =>
+              find
+                  .byKey(const ValueKey('home_open_restock_monitor_btn'))
+                  .evaluate()
+                  .isNotEmpty,
+        );
+
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('home_open_restock_monitor_btn')),
+        );
+        await flushAsyncUi(
+          tester,
+          until: () => find.text('Stok Menipis').evaluate().isNotEmpty,
+        );
+        expect(find.text('Stok Menipis'), findsOneWidget);
+        expect(find.text('Telur Puyuh Kemasan'), findsOneWidget);
+        expect(find.textContaining('Berkah Sentosa'), findsWidgets);
+
+        // Kembali lalu uji jalur kedua lewat NotificationCenterSheet
+        await tester.tap(find.byKey(const ValueKey('stok_menipis_back_btn')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byTooltip('Notifikasi & Sinkronisasi'));
+        await tester.pumpAndSettle();
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('notif_open_restock_monitor_btn')),
+        );
+        await flushAsyncUi(
+          tester,
+          until: () => find.text('Stok Menipis').evaluate().isNotEmpty,
+        );
+
+        // Stepper micro-interaction (+2 => 16, -1 => 15)
+        expect(
+          find.text('Saran restok +14 Pouch ke faktur'),
+          findsOneWidget,
+        );
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_inc_mon-crit-puyuh')),
+        );
+        await tester.pumpAndSettle();
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_inc_mon-crit-puyuh')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Saran restok +16 Pouch ke faktur'),
+          findsOneWidget,
+        );
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_dec_mon-crit-puyuh')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Saran restok +15 Pouch ke faktur'),
+          findsOneWidget,
+        );
+
+        // Switch filter Pantauan (<= 25) dan Semua
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_filter_pantauan')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Pantauan Stok (11–25)'), findsOneWidget);
+        expect(find.text('Telur Bebek Asin'), findsOneWidget);
+
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_filter_semua')),
+        );
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('Pakan Jagung Halus'));
+        await tester.pumpAndSettle();
+        expect(find.text('Stok Aman (> 25)'), findsOneWidget);
+        expect(find.text('Pakan Jagung Halus'), findsOneWidget);
+
+        // Balik ke filter Kritis dan klik Buat Faktur
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_filter_kritis')),
+        );
+        await tester.pumpAndSettle();
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_create_faktur_mon-crit-puyuh')),
+        );
+        await flushAsyncUi(
+          tester,
+          until: () =>
+              find.text('Faktur Barang Masuk').evaluate().isNotEmpty,
+        );
+        expect(find.text('Faktur Barang Masuk'), findsOneWidget);
+        expect(find.text('Telur Puyuh Kemasan'), findsWidgets);
+        expect(find.text('15'), findsOneWidget);
+        expect(find.textContaining('Berkah Sentosa'), findsWidgets);
+      },
+    );
+
+    testWidgets(
+      'Validasi batas bawah qty=1 memicu ShakeOnError, QuickFaktur & 320x568 1.4x bebas overflow',
+      (tester) async {
+        tester.view.physicalSize = const Size(320, 568);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final opSession = AuthSession(
+          uid: 'ui-restock-op',
+          email: 'op.restock@depottelur36.com',
+          accountId: 'op_restock',
+          displayName: 'Operator Gudang',
+          role: UserRole.petugas,
+          petugasRemoteId: 'restock-op-remote',
+          provider: AuthProviderType.emailPassword,
+          signedInAt: DateTime(2026, 2, 18),
+        );
+
+        await tester.runAsync(() async {
+          await inventoryRepository.saveBarang(
+            existingRemoteId: 'mon-empty-tray',
+            namaBarang: 'Egg Tray Karton Tebal',
+            hargaSatuan: 1200,
+            satuan: 'Lembar',
+            stokBarang: 0,
+          );
+          await inventoryRepository.saveBarang(
+            existingRemoteId: 'mon-watch-sak',
+            namaBarang: 'Dedak Halus 50kg',
+            hargaSatuan: 115000,
+            satuan: 'Sak',
+            stokBarang: 19,
+          );
+        });
+
+        final restockVm = RestockMonitorViewModel.fromRepository(
+          session: opSession,
+          repository: inventoryRepository,
+        );
+        addTearDown(restockVm.dispose);
+        await tester.runAsync(() => restockVm.loadData());
+        final emptyBarang = restockVm.snapshot.criticalItems
+            .firstWhere((i) => i.barang.remoteId == 'mon-empty-tray')
+            .barang;
+        restockVm.setDraftQty(emptyBarang, 1);
+
+        RestockMonitorItem? triggeredItem;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.light(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                disableAnimations: true,
+                textScaler: const TextScaler.linear(1.4),
+              ),
+              child: child!,
+            ),
+            home: StokMenipisScreen(
+              viewModel: restockVm,
+              onStartRestockFaktur: (item) => triggeredItem = item,
+              onOpenEmptyFaktur: () {},
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text('Habis'), findsOneWidget);
+
+        // Tekan decrement saat draftQty = 1 -> validasi shake banner muncul
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_dec_mon-empty-tray')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.textContaining('minimal 1 Lembar'),
+          findsOneWidget,
+        );
+
+        // Quick Faktur pada baris Pantauan
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_quick_faktur_mon-watch-sak')),
+        );
+        await tester.pumpAndSettle();
+        expect(triggeredItem?.barang.remoteId, 'mon-watch-sak');
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'Operator ketuk kartu LowStockAlertCard -> Stok Menipis -> Buat Faktur otomatis pindah ke tab Faktur + snackbar',
+      (tester) async {
+        final opSession = AuthSession(
+          uid: 'ui-restock-op-route',
+          email: 'op.route@depottelur36.com',
+          accountId: 'op_route',
+          displayName: 'Operator Kasir',
+          role: UserRole.petugas,
+          petugasRemoteId: 'restock-op-route-remote',
+          provider: AuthProviderType.emailPassword,
+          signedInAt: DateTime(2026, 2, 18),
+        );
+
+        await tester.runAsync(() async {
+          await inventoryRepository.savePetugas(
+            existingRemoteId: 'restock-op-route-remote',
+            namaPetugas: 'Operator Kasir',
+            role: UserRole.petugas,
+            pin: '3344',
+            email: 'op.route@depottelur36.com',
+          );
+          await inventoryRepository.saveBarang(
+            existingRemoteId: 'mon-op-crit-item',
+            namaBarang: 'Telur Omega Pack',
+            hargaSatuan: 31000,
+            satuan: 'Pack',
+            stokBarang: 5,
+          );
+        });
+
+        await tester.pumpWidget(
+          Provider<InventoryRepository>.value(
+            value: inventoryRepository,
+            child: MaterialApp(
+              theme: AppTheme.light(),
+              home: RoleHomeShellScreen(initialSession: opSession),
+            ),
+          ),
+        );
+        await flushAsyncUi(
+          tester,
+          until: () =>
+              find.textContaining('Telur Omega Pack').evaluate().isNotEmpty,
+        );
+
+        // Ketuk badan kartu LowStockAlertCard (bukan tombol 'Restock')
+        await scrollAndTap(tester, find.textContaining('Telur Omega Pack').first);
+        await flushAsyncUi(
+          tester,
+          until: () => find.text('Stok Menipis').evaluate().isNotEmpty,
+        );
+        expect(find.text('Stok Menipis'), findsOneWidget);
+
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('restock_create_faktur_mon-op-crit-item')),
+        );
+        await tester.pumpAndSettle();
+        // Tab berpindah ke Faktur Masuk (tertanam di shell Operator) & snackbar muncul
+        expect(find.text('Faktur Barang Masuk'), findsOneWidget);
+        expect(
+          find.textContaining('Siap restock Telur Omega Pack (+15 Pack)'),
+          findsOneWidget,
+        );
+        await tester.pump(const Duration(seconds: 4));
       },
     );
   });

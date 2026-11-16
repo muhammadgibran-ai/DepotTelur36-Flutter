@@ -112,9 +112,10 @@ class DashboardViewModel extends ChangeNotifier {
     required this._session,
     required this._dataSource,
   }) {
-    _dataSub = _dataSource.onDataChanged.listen((_) {
-      unawaited(loadDashboardData());
-    });
+    _dataSub = _dataSource.onDataChanged.listen(
+      (_) => unawaited(loadDashboardData()),
+      onError: (_) {},
+    );
     _dataSource.syncListenable?.addListener(_handleSyncChanged);
   }
 
