@@ -102,6 +102,10 @@ abstract class MasterCrudDataSource {
     required int stokBarang,
     required String satuan,
     required double hargaSatuan,
+    String? fotoBarang,
+    String? fotoFormat,
+    int? fotoSizeBytes,
+    bool clearFoto = false,
   });
 
   Future<void> updateBarangHargaBatch(Map<int, double> hargaById);
@@ -170,6 +174,10 @@ class RepositoryMasterCrudDataSource implements MasterCrudDataSource {
     required int stokBarang,
     required String satuan,
     required double hargaSatuan,
+    String? fotoBarang,
+    String? fotoFormat,
+    int? fotoSizeBytes,
+    bool clearFoto = false,
   }) {
     return _repository.saveBarang(
       idBarang: idBarang,
@@ -178,6 +186,10 @@ class RepositoryMasterCrudDataSource implements MasterCrudDataSource {
       stokBarang: stokBarang,
       satuan: satuan,
       hargaSatuan: hargaSatuan,
+      fotoBarang: fotoBarang,
+      fotoFormat: fotoFormat,
+      fotoSizeBytes: fotoSizeBytes,
+      clearFoto: clearFoto,
     );
   }
 
@@ -296,6 +308,10 @@ class ReadOnlyDashboardBridgeDataSource implements MasterCrudDataSource {
     required int stokBarang,
     required String satuan,
     required double hargaSatuan,
+    String? fotoBarang,
+    String? fotoFormat,
+    int? fotoSizeBytes,
+    bool clearFoto = false,
   }) async => _readOnlyError();
 
   @override
@@ -584,6 +600,10 @@ class MasterCrudViewModel extends ChangeNotifier {
     required int stokBarang,
     required String satuan,
     required double hargaSatuan,
+    String? fotoBarang,
+    String? fotoFormat,
+    int? fotoSizeBytes,
+    bool clearFoto = false,
   }) {
     return _runMutation(
       () => _dataSource.saveBarang(
@@ -593,6 +613,10 @@ class MasterCrudViewModel extends ChangeNotifier {
         stokBarang: stokBarang,
         satuan: satuan,
         hargaSatuan: hargaSatuan,
+        fotoBarang: fotoBarang,
+        fotoFormat: fotoFormat,
+        fotoSizeBytes: fotoSizeBytes,
+        clearFoto: clearFoto,
       ),
     );
   }

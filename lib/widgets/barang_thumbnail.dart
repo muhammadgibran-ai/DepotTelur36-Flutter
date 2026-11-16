@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import 'package:depot_telur_36/core/theme/app_theme.dart';
 import 'package:depot_telur_36/models/barang.dart';
+import 'package:depot_telur_36/services/barang_photo_service.dart';
 
 /// Pemetaan aset gambar lokal untuk produk & ilustrasi banner `.pen`.
 class DashboardAssets {
@@ -102,12 +103,39 @@ class BarangThumbnail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 2.0;
+    final cachePx = (size * dpr).round().clamp(48, 512);
+
     return ValueListenableBuilder<Map<String, String>>(
       valueListenable: BarangPhotoPresets.customAssetsListenable,
       builder: (context, overrides, _) {
-        final assetPath =
-            overrides[barang.remoteId] ??
+        final memoryBytes = barang.hasCustomWebpPhoto
+            ? BarangPhotoOptimizer.tryDecodeDataUri(barang.fotoBarang)
+            : null;
+        final fallbackAssetPath = overrides[barang.remoteId] ??
+            (barang.hasPersistedPresetPhoto ? barang.fotoBarang.trim() : null) ??
             DashboardAssets.assetPathForBarang(barang);
+
+        Widget child;
+        if (memoryBytes != null) {
+          child = Image.memory(
+            memoryBytes,
+            width: size,
+            height: size,
+            cacheWidth: cachePx,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.medium,
+            excludeFromSemantics: true,
+            errorBuilder: (_, _, _) => _assetOrFallback(
+              fallbackAssetPath,
+              cachePx: cachePx,
+            ),
+          );
+        } else {
+          child = _assetOrFallback(fallbackAssetPath, cachePx: cachePx);
+        }
+
         return Container(
           width: size,
           height: size,
@@ -117,18 +145,23 @@ class BarangThumbnail extends StatelessWidget {
             border: Border.all(color: AppColors.borderSubtle),
           ),
           clipBehavior: Clip.antiAlias,
-          child: assetPath == null
-              ? _fallbackIcon()
-              : Image.asset(
-                  assetPath,
-                  width: size,
-                  height: size,
-                  fit: BoxFit.cover,
-                  excludeFromSemantics: true,
-                  errorBuilder: (context, error, stackTrace) => _fallbackIcon(),
-                ),
+          child: child,
         );
       },
+    );
+  }
+
+  Widget _assetOrFallback(String? assetPath, {required int cachePx}) {
+    if (assetPath == null) return _fallbackIcon();
+    return Image.asset(
+      assetPath,
+      width: size,
+      height: size,
+      cacheWidth: cachePx,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      excludeFromSemantics: true,
+      errorBuilder: (context, error, stackTrace) => _fallbackIcon(),
     );
   }
 
@@ -162,6 +195,7 @@ class BarangPhotoPresets {
 
   static String? resolveAssetPath(Barang barang) {
     return customAssetsListenable.value[barang.remoteId] ??
+        (barang.hasPersistedPresetPhoto ? barang.fotoBarang.trim() : null) ??
         DashboardAssets.assetPathForBarang(barang);
   }
 

@@ -282,6 +282,10 @@ class _FakeMasterCrudDataSource implements MasterCrudDataSource {
     required int stokBarang,
     required String satuan,
     required double hargaSatuan,
+    String? fotoBarang,
+    String? fotoFormat,
+    int? fotoSizeBytes,
+    bool clearFoto = false,
   }) async {
     saveBarangCalls++;
     if (onSaveBarang != null) {

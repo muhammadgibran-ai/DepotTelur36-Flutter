@@ -536,6 +536,17 @@ Future<_IntegratedAppContext> _createIntegratedContext({
 Future<void> _drainEvents([int ms = 60]) =>
     Future<void>.delayed(Duration(milliseconds: ms));
 
+Future<void> _waitUntilCondition(
+  bool Function() condition, {
+  int maxMs = 4000,
+}) async {
+  final steps = (maxMs / 25).ceil();
+  for (var i = 0; i < steps; i++) {
+    if (condition()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 25));
+  }
+}
+
 Future<void> _flushUi(
   WidgetTester tester, {
   bool Function()? until,
@@ -974,7 +985,11 @@ void main() {
 
         // Pulihkan internet -> SyncService harus push antrean lokal ke Firestore tanpa double-count stok
         ctx.connectivity.setOnline(true);
-        await _drainEvents(180);
+        await _drainEvents(30);
+        await ctx.syncService.flushPendingTasks();
+        await _waitUntilCondition(
+          () => ctx.syncService.state.pendingCount == 0,
+        );
 
         expect(ctx.syncService.state.isOnline, isTrue);
         expect(ctx.syncService.state.pendingCount, 0);
@@ -1330,7 +1345,13 @@ void main() {
           'remote_id': 'brg-deferred-1',
           'updated_at': today.toIso8601String(),
         });
-        await _drainEvents(160);
+        await _drainEvents(30);
+        await ctx.syncService.flushPendingTasks();
+        await _waitUntilCondition(
+          () =>
+              rekapVm.report.notaCount == initialNotaCount + 1 &&
+              txVm.notas.any((n) => n.remoteId == 'nota-cloud-deferred'),
+        );
 
         expect(rekapVm.report.notaCount, initialNotaCount + 1);
         expect(rekapVm.report.totalPenjualanNota, 75000);

@@ -12,6 +12,7 @@ import 'package:depot_telur_36/screens/master/atur_harga_screen.dart';
 import 'package:depot_telur_36/screens/master/barang_form_screen.dart';
 import 'package:depot_telur_36/screens/master/petugas_form_screen.dart';
 import 'package:depot_telur_36/screens/master/supplier_form_screen.dart';
+import 'package:depot_telur_36/services/barang_photo_service.dart';
 import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
@@ -24,10 +25,12 @@ class MasterDataTabView extends StatefulWidget {
     super.key,
     required this.viewModel,
     this.onRefreshRequested,
+    this.photoPicker,
   });
 
   final MasterCrudViewModel viewModel;
   final Future<void> Function()? onRefreshRequested;
+  final BarangPhotoPicker? photoPicker;
 
   @override
   State<MasterDataTabView> createState() => _MasterDataTabViewState();
@@ -84,7 +87,9 @@ class _MasterDataTabViewState extends State<MasterDataTabView> {
     final vm = widget.viewModel;
     switch (vm.activeCategory) {
       case MasterCategory.barang:
-        await _pushScreen(BarangFormScreen(viewModel: vm));
+        await _pushScreen(
+          BarangFormScreen(viewModel: vm, photoPicker: widget.photoPicker),
+        );
       case MasterCategory.supplier:
         await _pushScreen(SupplierFormScreen(viewModel: vm));
       case MasterCategory.pelanggan:
@@ -520,7 +525,11 @@ class _MasterDataTabViewState extends State<MasterDataTabView> {
                 key: ValueKey('edit_barang_${item.remoteId}'),
                 semanticLabel: 'Edit ${item.namaBarang}',
                 onTap: () => _pushScreen(
-                  BarangFormScreen(viewModel: vm, initialBarang: item),
+                  BarangFormScreen(
+                    viewModel: vm,
+                    initialBarang: item,
+                    photoPicker: widget.photoPicker,
+                  ),
                 ),
               ),
             ],

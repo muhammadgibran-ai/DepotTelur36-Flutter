@@ -8,6 +8,9 @@ class Barang {
     required this.stokBarang,
     required this.satuan,
     required this.hargaSatuan,
+    this.fotoBarang = '',
+    this.fotoFormat = '',
+    this.fotoSizeBytes = 0,
     required this.remoteId,
     this.syncStatus = SyncStatus.pending,
     required this.updatedAt,
@@ -18,6 +21,9 @@ class Barang {
   final int stokBarang;
   final String satuan;
   final double hargaSatuan;
+  final String fotoBarang;
+  final String fotoFormat;
+  final int fotoSizeBytes;
   final String remoteId;
   final SyncStatus syncStatus;
   final DateTime updatedAt;
@@ -25,12 +31,19 @@ class Barang {
   /// Menandai barang yang stoknya perlu segera dipesan ke supplier.
   bool get isLowStock => stokBarang <= 10;
 
+  bool get hasCustomWebpPhoto => fotoBarang.trim().startsWith('data:image/');
+  bool get hasPersistedPresetPhoto => fotoBarang.trim().startsWith('assets/');
+  bool get hasStoredPhoto => fotoBarang.trim().isNotEmpty;
+
   Barang copyWith({
     int? idBarang,
     String? namaBarang,
     int? stokBarang,
     String? satuan,
     double? hargaSatuan,
+    String? fotoBarang,
+    String? fotoFormat,
+    int? fotoSizeBytes,
     String? remoteId,
     SyncStatus? syncStatus,
     DateTime? updatedAt,
@@ -41,6 +54,9 @@ class Barang {
       stokBarang: stokBarang ?? this.stokBarang,
       satuan: satuan ?? this.satuan,
       hargaSatuan: hargaSatuan ?? this.hargaSatuan,
+      fotoBarang: fotoBarang ?? this.fotoBarang,
+      fotoFormat: fotoFormat ?? this.fotoFormat,
+      fotoSizeBytes: fotoSizeBytes ?? this.fotoSizeBytes,
       remoteId: remoteId ?? this.remoteId,
       syncStatus: syncStatus ?? this.syncStatus,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -54,6 +70,9 @@ class Barang {
       'stok_barang': stokBarang,
       'satuan': satuan,
       'harga_satuan': hargaSatuan,
+      'foto_barang': fotoBarang,
+      'foto_format': fotoFormat,
+      'foto_size_bytes': fotoSizeBytes,
       'remote_id': remoteId,
       'sync_status': syncStatus.value,
       'updated_at': updatedAt.toIso8601String(),
@@ -67,6 +86,9 @@ class Barang {
       stokBarang: (map['stok_barang'] as num?)?.toInt() ?? 0,
       satuan: (map['satuan'] as String?) ?? 'Kg',
       hargaSatuan: (map['harga_satuan'] as num?)?.toDouble() ?? 0.0,
+      fotoBarang: (map['foto_barang'] as String?) ?? '',
+      fotoFormat: (map['foto_format'] as String?) ?? '',
+      fotoSizeBytes: (map['foto_size_bytes'] as num?)?.toInt() ?? 0,
       remoteId: (map['remote_id'] as String?) ?? '',
       syncStatus: SyncStatus.fromString(map['sync_status'] as String?),
       updatedAt: DateTime.tryParse((map['updated_at'] as String?) ?? '') ??
@@ -80,6 +102,9 @@ class Barang {
       'stok_barang': stokBarang,
       'satuan': satuan,
       'harga_satuan': hargaSatuan,
+      'foto_barang': fotoBarang,
+      'foto_format': fotoFormat,
+      'foto_size_bytes': fotoSizeBytes,
       'remote_id': remoteId,
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -94,6 +119,9 @@ class Barang {
       stokBarang: (data['stok_barang'] as num?)?.toInt() ?? 0,
       satuan: (data['satuan'] as String?) ?? 'Kg',
       hargaSatuan: (data['harga_satuan'] as num?)?.toDouble() ?? 0.0,
+      fotoBarang: (data['foto_barang'] as String?) ?? '',
+      fotoFormat: (data['foto_format'] as String?) ?? '',
+      fotoSizeBytes: (data['foto_size_bytes'] as num?)?.toInt() ?? 0,
       remoteId: (data['remote_id'] as String?) ?? documentId,
       syncStatus: SyncStatus.synced,
       updatedAt: DateTime.tryParse((data['updated_at'] as String?) ?? '') ??

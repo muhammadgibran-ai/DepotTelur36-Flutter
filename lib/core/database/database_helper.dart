@@ -29,7 +29,7 @@ class DatabaseHelper {
   DatabaseHelper.forTesting({required this.customDbPath});
 
   static const String databaseName = 'depottelur36.db';
-  static const int databaseVersion = 4;
+  static const int databaseVersion = 5;
 
   String? customDbPath;
   Database? _database;
@@ -91,6 +91,33 @@ class DatabaseHelper {
     }
     if (oldVersion < 4) {
       await _createPendingDeletesTable(db);
+    }
+    if (oldVersion < 5) {
+      await _addBarangPhotoColumnsIfMissing(db);
+    }
+  }
+
+  Future<void> _addBarangPhotoColumnsIfMissing(DatabaseExecutor db) async {
+    final tableInfo = await db.rawQuery('PRAGMA table_info(barang)');
+    final existingColumns = tableInfo
+        .map((row) => (row['name'] as String?)?.toLowerCase())
+        .whereType<String>()
+        .toSet();
+
+    if (!existingColumns.contains('foto_barang')) {
+      await db.execute(
+        "ALTER TABLE barang ADD COLUMN foto_barang TEXT NOT NULL DEFAULT ''",
+      );
+    }
+    if (!existingColumns.contains('foto_format')) {
+      await db.execute(
+        "ALTER TABLE barang ADD COLUMN foto_format TEXT NOT NULL DEFAULT ''",
+      );
+    }
+    if (!existingColumns.contains('foto_size_bytes')) {
+      await db.execute(
+        'ALTER TABLE barang ADD COLUMN foto_size_bytes INTEGER NOT NULL DEFAULT 0',
+      );
     }
   }
 
@@ -155,6 +182,9 @@ class DatabaseHelper {
         stok_barang INTEGER NOT NULL DEFAULT 0,
         satuan TEXT NOT NULL,
         harga_satuan REAL NOT NULL DEFAULT 0.0,
+        foto_barang TEXT NOT NULL DEFAULT '',
+        foto_format TEXT NOT NULL DEFAULT '',
+        foto_size_bytes INTEGER NOT NULL DEFAULT 0,
         remote_id TEXT NOT NULL UNIQUE,
         sync_status TEXT NOT NULL DEFAULT 'PENDING',
         updated_at TEXT NOT NULL

@@ -1,10 +1,12 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:depot_telur_36/core/theme/app_theme.dart';
 import 'package:depot_telur_36/models/barang.dart';
 import 'package:depot_telur_36/models/sync_status.dart';
+import 'package:depot_telur_36/services/barang_photo_service.dart';
 import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
@@ -17,10 +19,12 @@ class BarangFormScreen extends StatefulWidget {
     super.key,
     required this.viewModel,
     this.initialBarang,
+    this.photoPicker,
   });
 
   final MasterCrudViewModel viewModel;
   final Barang? initialBarang;
+  final BarangPhotoPicker? photoPicker;
 
   @override
   State<BarangFormScreen> createState() => _BarangFormScreenState();
@@ -36,10 +40,16 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
   final GlobalKey _deleteCardKey = GlobalKey();
 
   String? _selectedPresetAsset;
+  String? _uploadedPhotoDataUri;
+  String? _uploadedPhotoFormat;
+  int _uploadedPhotoSizeBytes = 0;
   bool _presetWasCleared = false;
   bool _showPhotoPicker = false;
+  bool _isProcessingPhoto = false;
   bool _showDeleteConfirm = false;
   int _validationErrorPulse = 0;
+  int _photoErrorPulse = 0;
+  String? _photoError;
 
   String? _namaError;
   String? _stokError;
@@ -61,8 +71,23 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
       text: barang != null ? barang.hargaSatuan.round().toString() : '',
     );
     if (barang != null) {
-      _selectedPresetAsset =
-          BarangPhotoPresets.customAssetsListenable.value[barang.remoteId];
+      if (barang.hasCustomWebpPhoto) {
+        _uploadedPhotoDataUri = barang.fotoBarang.trim();
+        _uploadedPhotoFormat = barang.fotoFormat.isEmpty
+            ? BarangPhotoOptimizer.webpFormat
+            : barang.fotoFormat;
+        _uploadedPhotoSizeBytes = barang.fotoSizeBytes > 0
+            ? barang.fotoSizeBytes
+            : (BarangPhotoOptimizer.tryDecodeDataUri(
+                      barang.fotoBarang,
+                    )?.length ??
+                0);
+      } else if (barang.hasPersistedPresetPhoto) {
+        _selectedPresetAsset = barang.fotoBarang.trim();
+      } else {
+        _selectedPresetAsset =
+            BarangPhotoPresets.customAssetsListenable.value[barang.remoteId];
+      }
     }
     widget.viewModel.clearMessages();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -89,7 +114,81 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
     });
   }
 
+  BarangPhotoPicker _resolvePhotoPicker() {
+    if (widget.photoPicker != null) return widget.photoPicker!;
+    try {
+      return Provider.of<BarangPhotoPicker>(context, listen: false);
+    } on ProviderNotFoundException {
+      return ImagePickerBarangPhotoPicker();
+    }
+  }
+
+  Future<void> _pickGalleryPhoto() async {
+    if (_isProcessingPhoto || widget.viewModel.isSaving) return;
+    setState(() {
+      _isProcessingPhoto = true;
+      _photoError = null;
+    });
+
+    try {
+      final picker = _resolvePhotoPicker();
+      final picked = await picker.pickFromGallery();
+      if (!mounted) return;
+      if (picked == null) {
+        setState(() => _isProcessingPhoto = false);
+        return;
+      }
+
+      final converted = await BarangPhotoOptimizer.convertFromBytes(
+        picked.bytes,
+        sourceFileName: picked.fileName,
+      );
+      if (!mounted) return;
+
+      HapticFeedback.mediumImpact();
+      setState(() {
+        _uploadedPhotoDataUri = converted.dataUri;
+        _uploadedPhotoFormat = converted.format;
+        _uploadedPhotoSizeBytes = converted.convertedSizeBytes;
+        _selectedPresetAsset = null;
+        _presetWasCleared = false;
+        _showPhotoPicker = false;
+        _isProcessingPhoto = false;
+        _photoError = null;
+      });
+    } on BarangPhotoException catch (e) {
+      if (!mounted) return;
+      HapticFeedback.heavyImpact();
+      setState(() {
+        _isProcessingPhoto = false;
+        _photoError = e.message;
+        _photoErrorPulse++;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      HapticFeedback.heavyImpact();
+      setState(() {
+        _isProcessingPhoto = false;
+        _photoError = 'Gagal mengupload dan mengonversi foto dari galeri.';
+        _photoErrorPulse++;
+      });
+    }
+  }
+
+  void _clearPhotoSelection() {
+    HapticFeedback.selectionClick();
+    setState(() {
+      _uploadedPhotoDataUri = null;
+      _uploadedPhotoFormat = null;
+      _uploadedPhotoSizeBytes = 0;
+      _selectedPresetAsset = null;
+      _presetWasCleared = true;
+      _photoError = null;
+    });
+  }
+
   Future<void> _submit() async {
+    if (_isProcessingPhoto) return;
     final namaRaw = _namaController.text;
     final stokRaw = _stokController.text.trim();
     final satuanRaw = _satuanController.text;
@@ -142,6 +241,30 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
 
     final targetRemoteId =
         widget.initialBarang?.remoteId ?? const Uuid().v4();
+
+    final String? fotoBarangToSave;
+    final String? fotoFormatToSave;
+    final int? fotoSizeToSave;
+    final bool clearFoto =
+        _presetWasCleared &&
+        _uploadedPhotoDataUri == null &&
+        _selectedPresetAsset == null;
+
+    if (_uploadedPhotoDataUri != null) {
+      fotoBarangToSave = _uploadedPhotoDataUri;
+      fotoFormatToSave =
+          _uploadedPhotoFormat ?? BarangPhotoOptimizer.webpFormat;
+      fotoSizeToSave = _uploadedPhotoSizeBytes;
+    } else if (_selectedPresetAsset != null) {
+      fotoBarangToSave = _selectedPresetAsset;
+      fotoFormatToSave = BarangPhotoOptimizer.assetFormat;
+      fotoSizeToSave = 0;
+    } else {
+      fotoBarangToSave = null;
+      fotoFormatToSave = null;
+      fotoSizeToSave = null;
+    }
+
     final ok = await widget.viewModel.saveBarang(
       idBarang: widget.initialBarang?.idBarang,
       existingRemoteId: targetRemoteId,
@@ -149,6 +272,10 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
       stokBarang: parsedStok!,
       satuan: satuanRaw,
       hargaSatuan: parsedHarga!,
+      fotoBarang: fotoBarangToSave,
+      fotoFormat: fotoFormatToSave,
+      fotoSizeBytes: fotoSizeToSave,
+      clearFoto: clearFoto,
     );
 
     if (!mounted) return;
@@ -157,13 +284,13 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
       return;
     }
 
-    if (_selectedPresetAsset != null) {
+    if (_uploadedPhotoDataUri != null || clearFoto) {
+      BarangPhotoPresets.setAssetForRemoteId(targetRemoteId, null);
+    } else if (_selectedPresetAsset != null) {
       BarangPhotoPresets.setAssetForRemoteId(
         targetRemoteId,
         _selectedPresetAsset,
       );
-    } else if (_presetWasCleared) {
-      BarangPhotoPresets.setAssetForRemoteId(targetRemoteId, null);
     }
 
     Navigator.of(context).pop(true);
@@ -202,6 +329,10 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
   }
 
   Widget _buildPhotoCard() {
+    final useClearedRemoteId =
+        _presetWasCleared &&
+        _uploadedPhotoDataUri == null &&
+        _selectedPresetAsset == null;
     final previewBarang = Barang(
       idBarang: widget.initialBarang?.idBarang,
       namaBarang: _namaController.text.trim().isEmpty
@@ -212,37 +343,40 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
           ? 'Kg'
           : _satuanController.text.trim(),
       hargaSatuan: double.tryParse(_hargaController.text.trim()) ?? 0,
-      remoteId: widget.initialBarang?.remoteId ?? '__preview_barang__',
+      fotoBarang: _uploadedPhotoDataUri ?? _selectedPresetAsset ?? '',
+      fotoFormat: _uploadedPhotoDataUri != null
+          ? (_uploadedPhotoFormat ?? BarangPhotoOptimizer.webpFormat)
+          : (_selectedPresetAsset != null
+                ? BarangPhotoOptimizer.assetFormat
+                : ''),
+      fotoSizeBytes: _uploadedPhotoDataUri != null ? _uploadedPhotoSizeBytes : 0,
+      remoteId: useClearedRemoteId
+          ? '__preview_cleared__'
+          : (widget.initialBarang?.remoteId ?? '__preview_barang__'),
       syncStatus: SyncStatus.pending,
       updatedAt: DateTime.now(),
     );
 
     final disableMotion = MediaQuery.disableAnimationsOf(context);
-    final previewWidget = _selectedPresetAsset != null
-        ? Container(
-            key: ValueKey('preset_${_selectedPresetAsset!}'),
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.borderSubtle),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Image.asset(
-              _selectedPresetAsset!,
-              width: 64,
-              height: 64,
-              fit: BoxFit.cover,
-              excludeFromSemantics: true,
-              errorBuilder: (_, _, _) =>
-                  BarangThumbnail(barang: previewBarang, size: 64, radius: 14),
-            ),
-          )
-        : KeyedSubtree(
-            key: const ValueKey('preset_auto'),
-            child: BarangThumbnail(barang: previewBarang, size: 64, radius: 14),
-          );
+    final hasActivePhoto =
+        _uploadedPhotoDataUri != null || _selectedPresetAsset != null;
+    final previewKey = ValueKey(
+      _uploadedPhotoDataUri != null
+          ? 'webp_${_uploadedPhotoDataUri.hashCode}'
+          : (_selectedPresetAsset != null
+                ? 'preset_${_selectedPresetAsset!}'
+                : (useClearedRemoteId ? 'preset_cleared' : 'preset_auto')),
+    );
+    final previewWidget = KeyedSubtree(
+      key: previewKey,
+      child: BarangThumbnail(barang: previewBarang, size: 64, radius: 14),
+    );
+
+    final subtitleText = _uploadedPhotoDataUri != null
+        ? 'Foto galeri teroptimasi WebP super ringan'
+        : _selectedPresetAsset != null
+        ? 'Preset foto produk aktif'
+        : 'Upload dari galeri otomatis dikonversi ke WebP ringan';
 
     return MasterSectionCard(
       child: Column(
@@ -278,7 +412,9 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Pilih preset foto produk agar kasir mudah mengenali barang',
+                      subtitleText,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: AppTypography.body(
                         fontSize: 12,
                         color: AppColors.textSecondary,
@@ -287,10 +423,161 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
+            ],
+          ),
+          ShakeOnError(
+            pulse: _photoErrorPulse,
+            child: SoftAnimatedReveal(
+              visible: _photoError != null,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Container(
+                  key: const ValueKey('barang_photo_error_banner'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.dangerBg,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.error_outline_rounded,
+                        size: 16,
+                        color: AppColors.danger,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _photoError ?? '',
+                          style: AppTypography.body(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.danger,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: IconButton(
+                          tooltip: 'Tutup pesan foto',
+                          onPressed: () => setState(() => _photoError = null),
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            size: 16,
+                            color: AppColors.danger,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
               Semantics(
                 button: true,
-                label: 'Ganti Foto Barang',
+                label: 'Upload foto barang dari galeri',
+                child: TactilePressScale(
+                  pressedScale: 0.94,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 48),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: AppColors.yolkSoft,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: AppColors.yolk.withValues(alpha: 0.55),
+                        ),
+                      ),
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          key: const ValueKey('barang_upload_gallery_button'),
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: _isProcessingPhoto ? null : _pickGalleryPhoto,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            child: AnimatedSwitcher(
+                              duration: disableMotion
+                                  ? Duration.zero
+                                  : AppTokens.microDuration,
+                              child: _isProcessingPhoto
+                                  ? Row(
+                                      key: const ValueKey('photo_busy'),
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const SizedBox(
+                                          width: 15,
+                                          height: 15,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: AppColors.ink,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Flexible(
+                                          child: Text(
+                                            'Mengonversi WebP...',
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: AppTypography.body(
+                                              fontSize: 12.5,
+                                              fontWeight: FontWeight.w700,
+                                              color: AppColors.ink,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : Row(
+                                      key: const ValueKey('photo_idle'),
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          Icons.photo_library_outlined,
+                                          size: 17,
+                                          color: AppColors.ink,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Flexible(
+                                          child: Text(
+                                            'Pilih dari Galeri',
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: AppTypography.body(
+                                              fontSize: 12.5,
+                                              fontWeight: FontWeight.w700,
+                                              color: AppColors.ink,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Semantics(
+                button: true,
+                label: _showPhotoPicker
+                    ? 'Tutup pilihan preset foto'
+                    : 'Buka pilihan preset foto',
                 child: TactilePressScale(
                   pressedScale: 0.94,
                   child: ConstrainedBox(
@@ -311,12 +598,13 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
                             vertical: 10,
                           ),
                           child: Center(
+                            widthFactor: 1,
                             child: AnimatedSwitcher(
                               duration: disableMotion
                                   ? Duration.zero
                                   : AppTokens.microDuration,
                               child: Text(
-                                _showPhotoPicker ? 'Tutup' : 'Ganti Foto',
+                                _showPhotoPicker ? 'Tutup' : 'Preset',
                                 key: ValueKey(_showPhotoPicker),
                                 style: AppTypography.body(
                                   fontSize: 12.5,
@@ -332,6 +620,55 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
                   ),
                 ),
               ),
+              if (hasActivePhoto)
+                Semantics(
+                  button: true,
+                  label: 'Reset foto barang ke otomatis',
+                  child: TactilePressScale(
+                    pressedScale: 0.94,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 48),
+                      child: Material(
+                        color: AppColors.dangerBg,
+                        borderRadius: BorderRadius.circular(12),
+                        child: InkWell(
+                          key: const ValueKey('barang_clear_photo_button'),
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: _clearPhotoSelection,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.delete_outline_rounded,
+                                  size: 16,
+                                  color: AppColors.danger,
+                                ),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    'Reset',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppTypography.body(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.danger,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
           SoftAnimatedReveal(
@@ -344,24 +681,26 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
                 children: [
                   _buildPresetChip(
                     label: 'Otomatis',
-                    isSelected: _selectedPresetAsset == null,
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      setState(() {
-                        _selectedPresetAsset = null;
-                        _presetWasCleared = true;
-                      });
-                    },
+                    isSelected:
+                        _uploadedPhotoDataUri == null &&
+                        _selectedPresetAsset == null,
+                    onTap: _clearPhotoSelection,
                   ),
                   for (final option in BarangPhotoPresets.options)
                     _buildPresetChip(
                       label: option.label,
-                      isSelected: _selectedPresetAsset == option.assetPath,
+                      isSelected:
+                          _uploadedPhotoDataUri == null &&
+                          _selectedPresetAsset == option.assetPath,
                       onTap: () {
                         HapticFeedback.selectionClick();
                         setState(() {
+                          _uploadedPhotoDataUri = null;
+                          _uploadedPhotoFormat = null;
+                          _uploadedPhotoSizeBytes = 0;
                           _selectedPresetAsset = option.assetPath;
                           _presetWasCleared = false;
+                          _photoError = null;
                         });
                       },
                     ),
@@ -647,7 +986,7 @@ class _BarangFormScreenState extends State<BarangFormScreen> {
               ),
               CrudActionFooter(
                 saveLabel: _isEdit ? 'Simpan Perubahan' : 'Simpan Barang',
-                isSaving: vm.isSaving,
+                isSaving: vm.isSaving || _isProcessingPhoto,
                 showDelete: _isEdit,
                 onDelete: _promptDelete,
                 onSave: _submit,

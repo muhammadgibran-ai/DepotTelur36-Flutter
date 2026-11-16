@@ -11,6 +11,7 @@ import 'package:depot_telur_36/models/supplier.dart';
 import 'package:depot_telur_36/models/sync_status.dart';
 import 'package:depot_telur_36/models/transaksi.dart';
 import 'package:depot_telur_36/repositories/auth_repository.dart';
+import 'package:depot_telur_36/services/barang_photo_service.dart';
 import 'package:depot_telur_36/services/sync_service.dart';
 
 /// Exception validasi bisnis & integritas master data DepotTelur36.
@@ -259,6 +260,10 @@ class InventoryRepository {
     required int stokBarang,
     required String satuan,
     required double hargaSatuan,
+    String? fotoBarang,
+    String? fotoFormat,
+    int? fotoSizeBytes,
+    bool clearFoto = false,
   }) async {
     final cleanNama = _validateSingleLineField(namaBarang, 'Nama barang');
     final cleanSatuan = _validateSingleLineField(
@@ -286,12 +291,38 @@ class InventoryRepository {
       duplicateMessage: 'Barang "$cleanNama" sudah terdaftar di katalog.',
     );
 
+    late final ({String fotoBarang, String fotoFormat, int fotoSizeBytes})
+        resolvedPhoto;
+    try {
+      if (clearFoto) {
+        resolvedPhoto = (fotoBarang: '', fotoFormat: '', fotoSizeBytes: 0);
+      } else if (fotoBarang != null) {
+        resolvedPhoto = BarangPhotoOptimizer.validateStoredPhoto(
+          fotoBarang: fotoBarang,
+          fotoFormat: fotoFormat,
+          fotoSizeBytes: fotoSizeBytes,
+        );
+      } else {
+        final prev = identity.targetExisting;
+        resolvedPhoto = (
+          fotoBarang: prev?.fotoBarang ?? '',
+          fotoFormat: prev?.fotoFormat ?? '',
+          fotoSizeBytes: prev?.fotoSizeBytes ?? 0,
+        );
+      }
+    } on BarangPhotoException catch (e) {
+      throw MasterDataValidationException(e.message);
+    }
+
     final barang = Barang(
       idBarang: identity.targetExisting?.idBarang ?? idBarang,
       namaBarang: cleanNama,
       stokBarang: stokBarang,
       satuan: cleanSatuan,
       hargaSatuan: hargaSatuan,
+      fotoBarang: resolvedPhoto.fotoBarang,
+      fotoFormat: resolvedPhoto.fotoFormat,
+      fotoSizeBytes: resolvedPhoto.fotoSizeBytes,
       remoteId: identity.remoteId,
       syncStatus: SyncStatus.pending,
       updatedAt: DateTime.now(),
