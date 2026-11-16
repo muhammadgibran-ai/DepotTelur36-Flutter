@@ -911,6 +911,113 @@ class DatabaseHelper {
 
   // ==================== TRANSAKSI ATOMIK: FAKTUR & NOTA ====================
 
+  static const int _maxTransactionQty = 9999999;
+  static const String _cloudFallbackUpdatedAt = '1970-01-01T00:00:00.000Z';
+
+  void _assertUniqueDetailBarangIds(Iterable<int> ids, String docName) {
+    final seen = <int>{};
+    for (final id in ids) {
+      if (!seen.add(id)) {
+        throw ArgumentError('Terdapat barang duplikat dalam satu $docName.');
+      }
+    }
+  }
+
+  void _assertValidTransactionAmounts({
+    required String docName,
+    required double total,
+    required Iterable<({int qty, double jumlah})> items,
+    required String emptyQtyMessage,
+  }) {
+    if (!total.isFinite || total < 0) {
+      throw ArgumentError('Total $docName tidak valid.');
+    }
+    for (final item in items) {
+      if (item.qty <= 0) {
+        throw ArgumentError(emptyQtyMessage);
+      }
+      if (item.qty > _maxTransactionQty) {
+        throw ArgumentError(
+          'Jumlah barang $docName maksimal $_maxTransactionQty.',
+        );
+      }
+      if (!item.jumlah.isFinite || item.jumlah < 0) {
+        throw ArgumentError('Subtotal detail $docName tidak valid.');
+      }
+    }
+  }
+
+  Future<void> _assertRowExists(
+    Transaction txn, {
+    required String table,
+    required String idColumn,
+    required int id,
+    required String entityLabel,
+  }) async {
+    final rows = await txn.query(
+      table,
+      columns: [idColumn],
+      where: '$idColumn = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      throw StateError('$entityLabel dengan id $id tidak ditemukan.');
+    }
+  }
+
+  Future<void> _applyStockDeltas(
+    Transaction txn,
+    Map<int, int> stockDeltas, {
+    required String updatedAtIso,
+    required bool markBarangPending,
+    bool useInsertNotaMessage = false,
+  }) async {
+    for (final entry in stockDeltas.entries) {
+      final rows = await txn.query(
+        'barang',
+        columns: ['nama_barang', 'stok_barang'],
+        where: 'id_barang = ?',
+        whereArgs: [entry.key],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        throw StateError('Barang dengan id ${entry.key} tidak ditemukan.');
+      }
+      final currentStock = (rows.first['stok_barang'] as num).toInt();
+      final namaBarang = rows.first['nama_barang'] as String;
+      final nextStock = currentStock + entry.value;
+      if (nextStock < 0) {
+        if (useInsertNotaMessage) {
+          throw StateError(
+            'Stok "$namaBarang" tidak cukup (tersisa $currentStock, diminta ${-entry.value}).',
+          );
+        }
+        throw StateError(
+          'Stok "$namaBarang" tidak cukup untuk perubahan transaksi (tersisa $currentStock, selisih ${entry.value}).',
+        );
+      }
+      if (nextStock > _maxTransactionQty) {
+        throw StateError(
+          'Stok "$namaBarang" melebihi batas maksimum ($_maxTransactionQty).',
+        );
+      }
+      final updateValues = <String, Object?>{
+        'stok_barang': nextStock,
+        'updated_at': updatedAtIso,
+      };
+      if (markBarangPending) {
+        updateValues['sync_status'] = SyncStatus.pending.value;
+      }
+      await txn.update(
+        'barang',
+        updateValues,
+        where: 'id_barang = ?',
+        whereArgs: [entry.key],
+      );
+    }
+  }
+
   /// Menyimpan `faktur` beserta `detail_faktur` dan otomatis MENAMBAH `stok_barang`
   /// dalam satu transaksi SQLite atomik (berfungsi penuh saat offline).
   Future<int> insertFakturTransaction(
@@ -920,23 +1027,193 @@ class DatabaseHelper {
     if (details.isEmpty) {
       throw ArgumentError('Detail faktur tidak boleh kosong.');
     }
+    _assertUniqueDetailBarangIds(details.map((e) => e.idBarang), 'faktur');
+    _assertValidTransactionAmounts(
+      docName: 'faktur',
+      total: faktur.total,
+      items: details.map((e) => (qty: e.quantity, jumlah: e.jumlah)),
+      emptyQtyMessage: 'Quantity barang masuk harus lebih dari 0.',
+    );
+    final stockDeltas = <int, int>{};
+    for (final item in details) {
+      stockDeltas[item.idBarang] = item.quantity;
+    }
+
     final db = await database;
     return db.transaction((txn) async {
+      await _assertRowExists(
+        txn,
+        table: 'supplier',
+        idColumn: 'id_supplier',
+        id: faktur.idSupplier,
+        entityLabel: 'Supplier',
+      );
+      await _assertRowExists(
+        txn,
+        table: 'petugas',
+        idColumn: 'id_petugas',
+        id: faktur.idPetugas,
+        entityLabel: 'Petugas',
+      );
+
+      final updatedIso = faktur.updatedAt.toIso8601String();
+      await _applyStockDeltas(
+        txn,
+        stockDeltas,
+        updatedAtIso: updatedIso,
+        markBarangPending: false,
+      );
+
       final fakturId = await txn.insert('faktur', faktur.toMap());
       for (final item in details) {
-        if (item.quantity <= 0) {
-          throw ArgumentError('Quantity barang masuk harus lebih dari 0.');
-        }
         await txn.insert(
           'detail_faktur',
           item.copyWith(idFaktur: fakturId).toMap(),
         );
-        await txn.rawUpdate(
-          'UPDATE barang SET stok_barang = stok_barang + ?, updated_at = ? WHERE id_barang = ?',
-          [item.quantity, faktur.updatedAt.toIso8601String(), item.idBarang],
-        );
       }
       return fakturId;
+    });
+  }
+
+  /// Memperbarui header & detail `faktur` secara atomik dengan rekonsiliasi
+  /// selisih stok barang masuk serta penandaan sinkronisasi Cloud.
+  Future<void> updateFakturTransaction(
+    Faktur updated,
+    List<DetailFaktur> details,
+  ) async {
+    final idFaktur = updated.idFaktur;
+    if (idFaktur == null) {
+      throw ArgumentError('ID faktur wajib diisi untuk pembaruan.');
+    }
+    if (details.isEmpty) {
+      throw ArgumentError('Detail faktur tidak boleh kosong.');
+    }
+    _assertUniqueDetailBarangIds(details.map((e) => e.idBarang), 'faktur');
+    _assertValidTransactionAmounts(
+      docName: 'faktur',
+      total: updated.total,
+      items: details.map((e) => (qty: e.quantity, jumlah: e.jumlah)),
+      emptyQtyMessage: 'Quantity barang masuk harus lebih dari 0.',
+    );
+
+    final db = await database;
+    await db.transaction((txn) async {
+      final existingRows = await txn.query(
+        'faktur',
+        where: 'id_faktur = ?',
+        whereArgs: [idFaktur],
+        limit: 1,
+      );
+      if (existingRows.isEmpty) {
+        throw StateError('Faktur tidak ditemukan atau sudah dihapus.');
+      }
+      final existingRemoteId =
+          (existingRows.first['remote_id'] as String?) ?? updated.remoteId;
+
+      await _assertRowExists(
+        txn,
+        table: 'supplier',
+        idColumn: 'id_supplier',
+        id: updated.idSupplier,
+        entityLabel: 'Supplier',
+      );
+      await _assertRowExists(
+        txn,
+        table: 'petugas',
+        idColumn: 'id_petugas',
+        id: updated.idPetugas,
+        entityLabel: 'Petugas',
+      );
+
+      final oldDetailRows = await txn.query(
+        'detail_faktur',
+        where: 'id_faktur = ?',
+        whereArgs: [idFaktur],
+      );
+      final stockDeltas = <int, int>{};
+      for (final row in oldDetailRows) {
+        final idBarang = (row['id_barang'] as num).toInt();
+        final oldQty = (row['quantity'] as num).toInt();
+        stockDeltas[idBarang] = (stockDeltas[idBarang] ?? 0) - oldQty;
+      }
+      for (final item in details) {
+        stockDeltas[item.idBarang] =
+            (stockDeltas[item.idBarang] ?? 0) + item.quantity;
+      }
+
+      final updatedIso = updated.updatedAt.toIso8601String();
+      await _applyStockDeltas(
+        txn,
+        stockDeltas,
+        updatedAtIso: updatedIso,
+        markBarangPending: true,
+      );
+
+      final normalized = updated.copyWith(
+        idFaktur: idFaktur,
+        remoteId: existingRemoteId,
+        syncStatus: SyncStatus.pending,
+      );
+      await txn.update(
+        'faktur',
+        normalized.toMap(),
+        where: 'id_faktur = ?',
+        whereArgs: [idFaktur],
+      );
+      await txn.delete(
+        'detail_faktur',
+        where: 'id_faktur = ?',
+        whereArgs: [idFaktur],
+      );
+      for (final item in details) {
+        await txn.insert(
+          'detail_faktur',
+          item.copyWith(idFaktur: idFaktur).toMap(),
+        );
+      }
+    });
+  }
+
+  /// Menghapus `faktur` beserta detailnya secara atomik dan membalikkan
+  /// penambahan stok barang jika stok gudang masih mencukupi.
+  Future<void> deleteFakturTransaction(int idFaktur) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'faktur',
+        columns: ['remote_id'],
+        where: 'id_faktur = ?',
+        whereArgs: [idFaktur],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        throw StateError('Faktur tidak ditemukan atau sudah dihapus.');
+      }
+      final remoteId = (rows.first['remote_id'] as String?) ?? '';
+      final detailRows = await txn.query(
+        'detail_faktur',
+        where: 'id_faktur = ?',
+        whereArgs: [idFaktur],
+      );
+      final stockDeltas = <int, int>{};
+      for (final row in detailRows) {
+        final idBarang = (row['id_barang'] as num).toInt();
+        final qty = (row['quantity'] as num).toInt();
+        stockDeltas[idBarang] = (stockDeltas[idBarang] ?? 0) - qty;
+      }
+
+      await _applyStockDeltas(
+        txn,
+        stockDeltas,
+        updatedAtIso: DateTime.now().toIso8601String(),
+        markBarangPending: true,
+      );
+      await _recordPendingDelete(txn, 'faktur', remoteId);
+      await txn.delete(
+        'faktur',
+        where: 'id_faktur = ?',
+        whereArgs: [idFaktur],
+      );
     });
   }
 
@@ -949,30 +1226,43 @@ class DatabaseHelper {
     if (details.isEmpty) {
       throw ArgumentError('Detail nota tidak boleh kosong.');
     }
+    _assertUniqueDetailBarangIds(details.map((e) => e.idBarang), 'nota');
+    _assertValidTransactionAmounts(
+      docName: 'nota',
+      total: nota.total,
+      items: details.map((e) => (qty: e.banyaknya, jumlah: e.jumlah)),
+      emptyQtyMessage: 'Banyaknya pembelian harus lebih dari 0.',
+    );
+    final stockDeltas = <int, int>{};
+    for (final item in details) {
+      stockDeltas[item.idBarang] = -item.banyaknya;
+    }
+
     final db = await database;
     return db.transaction((txn) async {
-      for (final item in details) {
-        if (item.banyaknya <= 0) {
-          throw ArgumentError('Banyaknya pembelian harus lebih dari 0.');
-        }
-        final rows = await txn.query(
-          'barang',
-          columns: ['nama_barang', 'stok_barang'],
-          where: 'id_barang = ?',
-          whereArgs: [item.idBarang],
-          limit: 1,
-        );
-        if (rows.isEmpty) {
-          throw StateError('Barang dengan id ${item.idBarang} tidak ditemukan.');
-        }
-        final stokSaatIni = (rows.first['stok_barang'] as num).toInt();
-        final namaBarang = rows.first['nama_barang'] as String;
-        if (stokSaatIni < item.banyaknya) {
-          throw StateError(
-            'Stok "$namaBarang" tidak cukup (tersisa $stokSaatIni, diminta ${item.banyaknya}).',
-          );
-        }
-      }
+      await _assertRowExists(
+        txn,
+        table: 'customer',
+        idColumn: 'id_customer',
+        id: nota.idCustomer,
+        entityLabel: 'Customer',
+      );
+      await _assertRowExists(
+        txn,
+        table: 'petugas',
+        idColumn: 'id_petugas',
+        id: nota.idPetugas,
+        entityLabel: 'Petugas',
+      );
+
+      final updatedIso = nota.updatedAt.toIso8601String();
+      await _applyStockDeltas(
+        txn,
+        stockDeltas,
+        updatedAtIso: updatedIso,
+        markBarangPending: false,
+        useInsertNotaMessage: true,
+      );
 
       final notaId = await txn.insert('nota', nota.toMap());
       for (final item in details) {
@@ -980,23 +1270,173 @@ class DatabaseHelper {
           'detail_nota',
           item.copyWith(idNota: notaId).toMap(),
         );
-        await txn.rawUpdate(
-          'UPDATE barang SET stok_barang = stok_barang - ?, updated_at = ? WHERE id_barang = ?',
-          [item.banyaknya, nota.updatedAt.toIso8601String(), item.idBarang],
-        );
       }
       return notaId;
+    });
+  }
+
+  /// Memperbarui header & detail `nota` secara atomik dengan mengembalikan stok
+  /// lama lalu memotong stok baru beserta penandaan sinkronisasi Cloud.
+  Future<void> updateNotaTransaction(
+    Nota updated,
+    List<DetailNota> details,
+  ) async {
+    final idNota = updated.idNota;
+    if (idNota == null) {
+      throw ArgumentError('ID nota wajib diisi untuk pembaruan.');
+    }
+    if (details.isEmpty) {
+      throw ArgumentError('Detail nota tidak boleh kosong.');
+    }
+    _assertUniqueDetailBarangIds(details.map((e) => e.idBarang), 'nota');
+    _assertValidTransactionAmounts(
+      docName: 'nota',
+      total: updated.total,
+      items: details.map((e) => (qty: e.banyaknya, jumlah: e.jumlah)),
+      emptyQtyMessage: 'Banyaknya pembelian harus lebih dari 0.',
+    );
+
+    final db = await database;
+    await db.transaction((txn) async {
+      final existingRows = await txn.query(
+        'nota',
+        where: 'id_nota = ?',
+        whereArgs: [idNota],
+        limit: 1,
+      );
+      if (existingRows.isEmpty) {
+        throw StateError('Nota tidak ditemukan atau sudah dihapus.');
+      }
+      final existingRemoteId =
+          (existingRows.first['remote_id'] as String?) ?? updated.remoteId;
+
+      await _assertRowExists(
+        txn,
+        table: 'customer',
+        idColumn: 'id_customer',
+        id: updated.idCustomer,
+        entityLabel: 'Customer',
+      );
+      await _assertRowExists(
+        txn,
+        table: 'petugas',
+        idColumn: 'id_petugas',
+        id: updated.idPetugas,
+        entityLabel: 'Petugas',
+      );
+
+      final oldDetailRows = await txn.query(
+        'detail_nota',
+        where: 'id_nota = ?',
+        whereArgs: [idNota],
+      );
+      final stockDeltas = <int, int>{};
+      for (final row in oldDetailRows) {
+        final idBarang = (row['id_barang'] as num).toInt();
+        final oldQty = (row['banyaknya'] as num).toInt();
+        stockDeltas[idBarang] = (stockDeltas[idBarang] ?? 0) + oldQty;
+      }
+      for (final item in details) {
+        stockDeltas[item.idBarang] =
+            (stockDeltas[item.idBarang] ?? 0) - item.banyaknya;
+      }
+
+      final updatedIso = updated.updatedAt.toIso8601String();
+      await _applyStockDeltas(
+        txn,
+        stockDeltas,
+        updatedAtIso: updatedIso,
+        markBarangPending: true,
+      );
+
+      final normalized = updated.copyWith(
+        idNota: idNota,
+        remoteId: existingRemoteId,
+        syncStatus: SyncStatus.pending,
+      );
+      await txn.update(
+        'nota',
+        normalized.toMap(),
+        where: 'id_nota = ?',
+        whereArgs: [idNota],
+      );
+      await txn.delete(
+        'detail_nota',
+        where: 'id_nota = ?',
+        whereArgs: [idNota],
+      );
+      for (final item in details) {
+        await txn.insert(
+          'detail_nota',
+          item.copyWith(idNota: idNota).toMap(),
+        );
+      }
+    });
+  }
+
+  /// Menghapus `nota` beserta detailnya secara atomik dan mengembalikan stok
+  /// barang yang sempat terjual.
+  Future<void> deleteNotaTransaction(int idNota) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'nota',
+        columns: ['remote_id'],
+        where: 'id_nota = ?',
+        whereArgs: [idNota],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        throw StateError('Nota tidak ditemukan atau sudah dihapus.');
+      }
+      final remoteId = (rows.first['remote_id'] as String?) ?? '';
+      final detailRows = await txn.query(
+        'detail_nota',
+        where: 'id_nota = ?',
+        whereArgs: [idNota],
+      );
+      final stockDeltas = <int, int>{};
+      for (final row in detailRows) {
+        final idBarang = (row['id_barang'] as num).toInt();
+        final qty = (row['banyaknya'] as num).toInt();
+        stockDeltas[idBarang] = (stockDeltas[idBarang] ?? 0) + qty;
+      }
+
+      await _applyStockDeltas(
+        txn,
+        stockDeltas,
+        updatedAtIso: DateTime.now().toIso8601String(),
+        markBarangPending: true,
+      );
+      await _recordPendingDelete(txn, 'nota', remoteId);
+      await txn.delete(
+        'nota',
+        where: 'id_nota = ?',
+        whereArgs: [idNota],
+      );
     });
   }
 
   /// Mengambil daftar `faktur` lengkap dengan nama supplier & petugas.
   Future<List<Faktur>> getAllFaktur() => _fetchFaktur();
 
+  /// Mengambil satu `faktur` berdasarkan [idFaktur] atau null jika tidak ditemukan.
+  Future<Faktur?> getFakturById(int idFaktur) async {
+    final list = await _fetchFaktur(
+      whereClause: 'WHERE f.id_faktur = ?',
+      whereArgs: [idFaktur],
+    );
+    return list.isEmpty ? null : list.first;
+  }
+
   /// Mengambil antrean `faktur` yang belum tersinkron (`PENDING`).
   Future<List<Faktur>> getPendingFaktur() =>
       _fetchFaktur(whereClause: "WHERE f.sync_status = 'PENDING'");
 
-  Future<List<Faktur>> _fetchFaktur({String whereClause = ''}) async {
+  Future<List<Faktur>> _fetchFaktur({
+    String whereClause = '',
+    List<Object?> whereArgs = const [],
+  }) async {
     final db = await database;
     final rows = await db.rawQuery('''
       SELECT f.*, s.nama_supplier, p.nama_petugas,
@@ -1007,7 +1447,7 @@ class DatabaseHelper {
       LEFT JOIN petugas p ON f.id_petugas = p.id_petugas
       $whereClause
       ORDER BY f.id_faktur DESC
-    ''');
+    ''', whereArgs);
     final list = <Faktur>[];
     for (final row in rows) {
       final idFaktur = (row['id_faktur'] as num).toInt();
@@ -1038,11 +1478,23 @@ class DatabaseHelper {
   /// Mengambil daftar `nota` lengkap dengan nama customer & petugas.
   Future<List<Nota>> getAllNota() => _fetchNota();
 
+  /// Mengambil satu `nota` berdasarkan [idNota] atau null jika tidak ditemukan.
+  Future<Nota?> getNotaById(int idNota) async {
+    final list = await _fetchNota(
+      whereClause: 'WHERE n.id_nota = ?',
+      whereArgs: [idNota],
+    );
+    return list.isEmpty ? null : list.first;
+  }
+
   /// Mengambil antrean `nota` yang belum tersinkron (`PENDING`).
   Future<List<Nota>> getPendingNota() =>
       _fetchNota(whereClause: "WHERE n.sync_status = 'PENDING'");
 
-  Future<List<Nota>> _fetchNota({String whereClause = ''}) async {
+  Future<List<Nota>> _fetchNota({
+    String whereClause = '',
+    List<Object?> whereArgs = const [],
+  }) async {
     final db = await database;
     final rows = await db.rawQuery('''
       SELECT n.*, c.nama_customer, p.nama_petugas,
@@ -1053,7 +1505,7 @@ class DatabaseHelper {
       LEFT JOIN petugas p ON n.id_petugas = p.id_petugas
       $whereClause
       ORDER BY n.id_nota DESC
-    ''');
+    ''', whereArgs);
     final list = <Nota>[];
     for (final row in rows) {
       final idNota = (row['id_nota'] as num).toInt();
@@ -1192,27 +1644,117 @@ class DatabaseHelper {
     );
   }
 
-  /// Menyimpan `faktur` dari Cloud Firestore jika belum ada di SQLite lokal
-  /// (tanpa memodifikasi `stok_barang` karena stok diambil dari koleksi `barang`).
+  String _resolveCloudUpdatedAt(Object? rawUpdatedAt) {
+    if (rawUpdatedAt is String) {
+      final trimmed = rawUpdatedAt.trim();
+      if (DateTime.tryParse(trimmed) != null) {
+        return trimmed;
+      }
+    }
+    return _cloudFallbackUpdatedAt;
+  }
+
+  bool _shouldSkipCloudTransactionWrite({
+    required List<Map<String, Object?>> existing,
+    required String cloudUpdatedAt,
+  }) {
+    if (existing.isEmpty) return false;
+    final status = existing.first['sync_status'] as String?;
+    if (status == SyncStatus.pending.value) return true;
+    final localUpdatedAt = existing.first['updated_at'] as String?;
+    if (localUpdatedAt == cloudUpdatedAt) return true;
+    if (localUpdatedAt != null) {
+      final localDt = DateTime.tryParse(localUpdatedAt);
+      final cloudDt = DateTime.tryParse(cloudUpdatedAt);
+      if (localDt != null && cloudDt != null && !cloudDt.isAfter(localDt)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  double? _resolveCloudTotal(Object? rawTotal, double fallbackSum) {
+    if (rawTotal == null) return fallbackSum;
+    if (rawTotal is! num) return null;
+    final total = rawTotal.toDouble();
+    if (!total.isFinite || total < 0) return null;
+    return total;
+  }
+
+  Future<List<T>?> _resolveCloudTransactionDetails<T>({
+    required Object? rawDetails,
+    required String qtyKey,
+    required T Function(
+      int idBarang,
+      String barangRemoteId,
+      double jumlah,
+      int qty,
+    ) builder,
+  }) async {
+    if (rawDetails is! List || rawDetails.isEmpty) return null;
+    final seenBarangIds = <int>{};
+    final resolved = <T>[];
+    for (final raw in rawDetails) {
+      if (raw is! Map) return null;
+      final map = Map<String, dynamic>.from(raw);
+      final barangRemoteId = map['barang_remote_id'];
+      if (barangRemoteId is! String || barangRemoteId.trim().isEmpty) {
+        return null;
+      }
+      final rawQty = map[qtyKey];
+      final qty = rawQty is num && rawQty.isFinite ? rawQty.toInt() : 0;
+      final rawJumlah = map['jumlah'];
+      final jumlah = rawJumlah is num ? rawJumlah.toDouble() : -1.0;
+      if (qty <= 0 ||
+          qty > _maxTransactionQty ||
+          !jumlah.isFinite ||
+          jumlah < 0) {
+        return null;
+      }
+      final barang = await getBarangByRemoteId(barangRemoteId);
+      final idBarang = barang?.idBarang;
+      if (idBarang == null || !seenBarangIds.add(idBarang)) {
+        return null;
+      }
+      resolved.add(builder(idBarang, barangRemoteId, jumlah, qty));
+    }
+    return resolved;
+  }
+
+  /// Menyimpan atau memperbarui `faktur` dari Cloud Firestore secara aman
+  /// (mengabaikan entri di `pending_deletes` atau `sync_status = PENDING`,
+  /// tanpa memodifikasi `stok_barang` karena stok diambil dari koleksi `barang`).
   Future<bool> insertCloudFakturIfMissing({
     required String remoteId,
     required Map<String, dynamic> data,
   }) async {
+    if (remoteId.trim().isEmpty) return false;
+    if (await hasPendingDelete('faktur', remoteId)) return false;
+
     final db = await database;
     final existing = await db.query(
       'faktur',
-      columns: ['id_faktur'],
+      columns: ['id_faktur', 'sync_status', 'updated_at'],
       where: 'remote_id = ?',
       whereArgs: [remoteId],
       limit: 1,
     );
-    if (existing.isNotEmpty) {
+    final cloudUpdatedAt = _resolveCloudUpdatedAt(data['updated_at']);
+    if (_shouldSkipCloudTransactionWrite(
+      existing: existing,
+      cloudUpdatedAt: cloudUpdatedAt,
+    )) {
       return false;
     }
 
-    final supplierRemoteId = data['supplier_remote_id'] as String?;
-    final petugasRemoteId = data['petugas_remote_id'] as String?;
-    if (supplierRemoteId == null || petugasRemoteId == null) return false;
+    final supplierRemoteId = data['supplier_remote_id'];
+    final petugasRemoteId = data['petugas_remote_id'];
+    if (supplierRemoteId is! String ||
+        supplierRemoteId.trim().isEmpty ||
+        petugasRemoteId is! String ||
+        petugasRemoteId.trim().isEmpty) {
+      return false;
+    }
 
     final supplier = await getSupplierByRemoteId(supplierRemoteId);
     final petugas = await getPetugasByRemoteId(petugasRemoteId);
@@ -1220,39 +1762,55 @@ class DatabaseHelper {
       return false;
     }
 
-    final rawDetails = (data['details'] as List<dynamic>?) ?? const [];
-    final resolvedDetails = <DetailFaktur>[];
-    for (final raw in rawDetails) {
-      final map = Map<String, dynamic>.from(raw as Map);
-      final barangRemoteId = map['barang_remote_id'] as String?;
-      if (barangRemoteId == null) return false;
-      final barang = await getBarangByRemoteId(barangRemoteId);
-      if (barang?.idBarang == null) return false;
-      resolvedDetails.add(
-        DetailFaktur(
-          idBarang: barang!.idBarang!,
-          jumlah: (map['jumlah'] as num?)?.toDouble() ?? 0.0,
-          quantity: (map['quantity'] as num?)?.toInt() ?? 0,
-          barangRemoteId: barangRemoteId,
-        ),
-      );
-    }
-    if (resolvedDetails.isEmpty) return false;
+    final resolvedDetails = await _resolveCloudTransactionDetails<DetailFaktur>(
+      rawDetails: data['details'],
+      qtyKey: 'quantity',
+      builder: (idBarang, barangRemoteId, jumlah, qty) => DetailFaktur(
+        idBarang: idBarang,
+        jumlah: jumlah,
+        quantity: qty,
+        barangRemoteId: barangRemoteId,
+      ),
+    );
+    if (resolvedDetails == null) return false;
+
+    final resolvedTotal = _resolveCloudTotal(
+      data['total'],
+      Faktur.hitungTotal(resolvedDetails),
+    );
+    if (resolvedTotal == null) return false;
+
+    final fakturValues = <String, Object?>{
+      'no_faktur': (data['no_faktur'] as String?) ?? '',
+      'tanggal_faktur': (data['tanggal_faktur'] as String?) ?? '',
+      'total': resolvedTotal,
+      'id_supplier': supplier!.idSupplier!,
+      'id_petugas': petugas!.idPetugas!,
+      'remote_id': remoteId,
+      'supplier_remote_id': supplierRemoteId,
+      'petugas_remote_id': petugasRemoteId,
+      'sync_status': SyncStatus.synced.value,
+      'updated_at': cloudUpdatedAt,
+    };
 
     await db.transaction((txn) async {
-      final fakturId = await txn.insert('faktur', {
-        'no_faktur': (data['no_faktur'] as String?) ?? '',
-        'tanggal_faktur': (data['tanggal_faktur'] as String?) ?? '',
-        'total': (data['total'] as num?)?.toDouble() ?? 0.0,
-        'id_supplier': supplier!.idSupplier!,
-        'id_petugas': petugas!.idPetugas!,
-        'remote_id': remoteId,
-        'supplier_remote_id': supplierRemoteId,
-        'petugas_remote_id': petugasRemoteId,
-        'sync_status': SyncStatus.synced.value,
-        'updated_at': (data['updated_at'] as String?) ??
-            DateTime.now().toIso8601String(),
-      });
+      final int fakturId;
+      if (existing.isEmpty) {
+        fakturId = await txn.insert('faktur', fakturValues);
+      } else {
+        fakturId = (existing.first['id_faktur'] as num).toInt();
+        await txn.update(
+          'faktur',
+          fakturValues,
+          where: 'id_faktur = ?',
+          whereArgs: [fakturId],
+        );
+        await txn.delete(
+          'detail_faktur',
+          where: 'id_faktur = ?',
+          whereArgs: [fakturId],
+        );
+      }
       for (final item in resolvedDetails) {
         await txn.insert(
           'detail_faktur',
@@ -1263,27 +1821,40 @@ class DatabaseHelper {
     return true;
   }
 
-  /// Menyimpan `nota` dari Cloud Firestore jika belum ada di SQLite lokal
-  /// (tanpa memodifikasi `stok_barang` karena stok diambil dari koleksi `barang`).
+  /// Menyimpan atau memperbarui `nota` dari Cloud Firestore secara aman
+  /// (mengabaikan entri di `pending_deletes` atau `sync_status = PENDING`,
+  /// tanpa memodifikasi `stok_barang` karena stok diambil dari koleksi `barang`).
   Future<bool> insertCloudNotaIfMissing({
     required String remoteId,
     required Map<String, dynamic> data,
   }) async {
+    if (remoteId.trim().isEmpty) return false;
+    if (await hasPendingDelete('nota', remoteId)) return false;
+
     final db = await database;
     final existing = await db.query(
       'nota',
-      columns: ['id_nota'],
+      columns: ['id_nota', 'sync_status', 'updated_at'],
       where: 'remote_id = ?',
       whereArgs: [remoteId],
       limit: 1,
     );
-    if (existing.isNotEmpty) {
+    final cloudUpdatedAt = _resolveCloudUpdatedAt(data['updated_at']);
+    if (_shouldSkipCloudTransactionWrite(
+      existing: existing,
+      cloudUpdatedAt: cloudUpdatedAt,
+    )) {
       return false;
     }
 
-    final petugasRemoteId = data['petugas_remote_id'] as String?;
-    final customerRemoteId = data['customer_remote_id'] as String?;
-    if (petugasRemoteId == null || customerRemoteId == null) return false;
+    final petugasRemoteId = data['petugas_remote_id'];
+    final customerRemoteId = data['customer_remote_id'];
+    if (petugasRemoteId is! String ||
+        petugasRemoteId.trim().isEmpty ||
+        customerRemoteId is! String ||
+        customerRemoteId.trim().isEmpty) {
+      return false;
+    }
 
     final petugas = await getPetugasByRemoteId(petugasRemoteId);
     final customer = await getCustomerByRemoteId(customerRemoteId);
@@ -1291,38 +1862,54 @@ class DatabaseHelper {
       return false;
     }
 
-    final rawDetails = (data['details'] as List<dynamic>?) ?? const [];
-    final resolvedDetails = <DetailNota>[];
-    for (final raw in rawDetails) {
-      final map = Map<String, dynamic>.from(raw as Map);
-      final barangRemoteId = map['barang_remote_id'] as String?;
-      if (barangRemoteId == null) return false;
-      final barang = await getBarangByRemoteId(barangRemoteId);
-      if (barang?.idBarang == null) return false;
-      resolvedDetails.add(
-        DetailNota(
-          idBarang: barang!.idBarang!,
-          jumlah: (map['jumlah'] as num?)?.toDouble() ?? 0.0,
-          banyaknya: (map['banyaknya'] as num?)?.toInt() ?? 0,
-          barangRemoteId: barangRemoteId,
-        ),
-      );
-    }
-    if (resolvedDetails.isEmpty) return false;
+    final resolvedDetails = await _resolveCloudTransactionDetails<DetailNota>(
+      rawDetails: data['details'],
+      qtyKey: 'banyaknya',
+      builder: (idBarang, barangRemoteId, jumlah, qty) => DetailNota(
+        idBarang: idBarang,
+        jumlah: jumlah,
+        banyaknya: qty,
+        barangRemoteId: barangRemoteId,
+      ),
+    );
+    if (resolvedDetails == null) return false;
+
+    final resolvedTotal = _resolveCloudTotal(
+      data['total'],
+      Nota.hitungTotal(resolvedDetails),
+    );
+    if (resolvedTotal == null) return false;
+
+    final notaValues = <String, Object?>{
+      'tanggal_nota': (data['tanggal_nota'] as String?) ?? '',
+      'total': resolvedTotal,
+      'id_petugas': petugas!.idPetugas!,
+      'id_customer': customer!.idCustomer!,
+      'remote_id': remoteId,
+      'petugas_remote_id': petugasRemoteId,
+      'customer_remote_id': customerRemoteId,
+      'sync_status': SyncStatus.synced.value,
+      'updated_at': cloudUpdatedAt,
+    };
 
     await db.transaction((txn) async {
-      final notaId = await txn.insert('nota', {
-        'tanggal_nota': (data['tanggal_nota'] as String?) ?? '',
-        'total': (data['total'] as num?)?.toDouble() ?? 0.0,
-        'id_petugas': petugas!.idPetugas!,
-        'id_customer': customer!.idCustomer!,
-        'remote_id': remoteId,
-        'petugas_remote_id': petugasRemoteId,
-        'customer_remote_id': customerRemoteId,
-        'sync_status': SyncStatus.synced.value,
-        'updated_at': (data['updated_at'] as String?) ??
-            DateTime.now().toIso8601String(),
-      });
+      final int notaId;
+      if (existing.isEmpty) {
+        notaId = await txn.insert('nota', notaValues);
+      } else {
+        notaId = (existing.first['id_nota'] as num).toInt();
+        await txn.update(
+          'nota',
+          notaValues,
+          where: 'id_nota = ?',
+          whereArgs: [notaId],
+        );
+        await txn.delete(
+          'detail_nota',
+          where: 'id_nota = ?',
+          whereArgs: [notaId],
+        );
+      }
       for (final item in resolvedDetails) {
         await txn.insert(
           'detail_nota',

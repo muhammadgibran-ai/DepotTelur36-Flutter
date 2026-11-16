@@ -273,6 +273,8 @@ class SyncService extends ChangeNotifier {
         'petugas' => colPetugas,
         'customer' => colCustomer,
         'barang' => colBarang,
+        'faktur' => colFaktur,
+        'nota' => colNota,
         _ => null,
       };
       if (collection != null && entry.remoteId.isNotEmpty) {
@@ -397,6 +399,7 @@ class SyncService extends ChangeNotifier {
         snap.docs.map((d) => MapEntry(d.id, d.data())),
         _deferredCloudFaktur,
         _dbHelper.insertCloudFakturIfMissing,
+        pruneMissingFromDeferred: true,
       );
     });
 
@@ -406,6 +409,7 @@ class SyncService extends ChangeNotifier {
         snap.docs.map((d) => MapEntry(d.id, d.data())),
         _deferredCloudNota,
         _dbHelper.insertCloudNotaIfMissing,
+        pruneMissingFromDeferred: true,
       );
     });
   }
@@ -430,10 +434,20 @@ class SyncService extends ChangeNotifier {
     Future<bool> Function({
       required String remoteId,
       required Map<String, dynamic> data,
-    }) inserter,
-  ) async {
+    }) inserter, {
+    bool pruneMissingFromDeferred = false,
+  }) async {
+    final snapshotEntries = entries.toList();
+    if (pruneMissingFromDeferred) {
+      final activeRemoteIds = snapshotEntries.map((e) => e.key).toSet();
+      deferredPool.removeWhere((key, _) => !activeRemoteIds.contains(key));
+    }
     var inserted = false;
-    for (final entry in entries.toList()) {
+    for (final entry in snapshotEntries) {
+      if (await _dbHelper.hasPendingDelete(table, entry.key)) {
+        deferredPool.remove(entry.key);
+        continue;
+      }
       final ok = await inserter(remoteId: entry.key, data: entry.value);
       if (ok) {
         inserted = true;

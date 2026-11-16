@@ -67,7 +67,12 @@ class InventoryRepository {
   Future<List<Customer>> getAllCustomer() => _dbHelper.getAllCustomer();
   Future<List<Petugas>> getAllPetugas() => _dbHelper.getAllPetugas();
   Future<List<Faktur>> getAllFaktur() => _dbHelper.getAllFaktur();
+  Future<Faktur?> getFakturById(int idFaktur) =>
+      _dbHelper.getFakturById(idFaktur);
   Future<List<Nota>> getAllNota() => _dbHelper.getAllNota();
+  Future<Nota?> getNotaById(int idNota) => _dbHelper.getNotaById(idNota);
+
+  static final RegExp _isoDateRegex = RegExp(r'^\d{4}-\d{2}-\d{2}$');
 
   static final RegExp _controlCharsRegex = RegExp(
     r'[\x00-\x1F\x7F\u200B-\u200F\u202A-\u202E\u2060\uFEFF]',
@@ -576,7 +581,148 @@ class InventoryRepository {
     }
   }
 
-  // ==================== SIMPAN TRANSAKSI (BPMN TO-BE) ====================
+  // ==================== CRUD TRANSAKSI: FAKTUR & NOTA ====================
+
+  static const int _maxTransactionQty = 9999999;
+
+  Future<void> _assertUniqueNoFaktur(
+    String cleanNoFaktur, {
+    int? excludeIdFaktur,
+  }) async {
+    final targetKey = normalizeKey(cleanNoFaktur);
+    final existing = await _dbHelper.getAllFaktur();
+    for (final faktur in existing) {
+      if (faktur.idFaktur != excludeIdFaktur &&
+          normalizeKey(faktur.noFaktur) == targetKey) {
+        throw MasterDataValidationException(
+          'Nomor faktur "$cleanNoFaktur" sudah terdaftar.',
+        );
+      }
+    }
+  }
+
+  void _assertFiniteTotal(double total, String docName) {
+    if (!total.isFinite || total < 0) {
+      throw MasterDataValidationException(
+        'Total nominal $docName melebihi batas perhitungan.',
+      );
+    }
+  }
+
+  String _validateNoFaktur(String raw) {
+    if (hasControlChars(raw)) {
+      throw const MasterDataValidationException(
+        'Nomor faktur mengandung karakter yang tidak valid.',
+      );
+    }
+    final clean = normalizeText(raw);
+    if (clean.length < 3 || clean.length > 50) {
+      throw const MasterDataValidationException(
+        'Nomor faktur harus 3–50 karakter.',
+      );
+    }
+    return clean;
+  }
+
+  String _validateTransactionDate(String raw, String fieldLabel) {
+    if (hasControlChars(raw)) {
+      throw MasterDataValidationException(
+        '$fieldLabel mengandung karakter yang tidak valid.',
+      );
+    }
+    final clean = normalizeText(raw);
+    if (!_isoDateRegex.hasMatch(clean)) {
+      throw MasterDataValidationException(
+        '$fieldLabel harus berformat YYYY-MM-DD.',
+      );
+    }
+    final parts = clean.split('-');
+    final year = int.parse(parts[0]);
+    final month = int.parse(parts[1]);
+    final day = int.parse(parts[2]);
+    if (year < 2000 || year > 2100) {
+      throw MasterDataValidationException(
+        '$fieldLabel harus berada pada tahun 2000–2100.',
+      );
+    }
+    final parsed = DateTime(year, month, day);
+    if (parsed.year != year || parsed.month != month || parsed.day != day) {
+      throw MasterDataValidationException('$fieldLabel bukan tanggal yang valid.');
+    }
+    return clean;
+  }
+
+  List<T> _buildValidatedDetails<T>({
+    required List<({Barang barang, int qty})> items,
+    required String docName,
+    required T Function(Barang barang, int qty, double subtotal) builder,
+  }) {
+    if (items.isEmpty) {
+      throw MasterDataValidationException(
+        'Detail $docName wajib berisi minimal 1 barang.',
+      );
+    }
+    final seenBarangIds = <int>{};
+    final details = <T>[];
+    for (final entry in items) {
+      final barang = entry.barang;
+      if (barang.idBarang == null) {
+        throw MasterDataValidationException(
+          'Barang "${barang.namaBarang}" belum tersimpan di database.',
+        );
+      }
+      if (!seenBarangIds.add(barang.idBarang!)) {
+        throw MasterDataValidationException(
+          'Barang "${barang.namaBarang}" tidak boleh duplikat dalam satu $docName.',
+        );
+      }
+      if (entry.qty <= 0 || entry.qty > _maxTransactionQty) {
+        throw MasterDataValidationException(
+          'Jumlah "${barang.namaBarang}" harus antara 1 hingga 9.999.999.',
+        );
+      }
+      if (barang.hargaSatuan.isNaN ||
+          barang.hargaSatuan.isInfinite ||
+          barang.hargaSatuan < 0) {
+        throw MasterDataValidationException(
+          'Harga satuan "${barang.namaBarang}" tidak valid.',
+        );
+      }
+      final subtotal = barang.hargaSatuan * entry.qty;
+      if (!subtotal.isFinite || subtotal < 0) {
+        throw MasterDataValidationException(
+          'Subtotal "${barang.namaBarang}" tidak valid.',
+        );
+      }
+      details.add(
+        builder(barang, entry.qty, subtotal),
+      );
+    }
+    return details;
+  }
+
+  /// Menghasilkan nomor faktur bawaan dengan format `FKT-YYYYMMDD-NNN`.
+  Future<String> generateNextNoFaktur({DateTime? date}) async {
+    final targetDate = date ?? DateTime.now();
+    final y = targetDate.year.toString().padLeft(4, '0');
+    final m = targetDate.month.toString().padLeft(2, '0');
+    final d = targetDate.day.toString().padLeft(2, '0');
+    final dateTag = '$y$m$d';
+    final prefix = 'FKT-$dateTag-';
+    final existing = await getAllFaktur();
+    var maxSeq = 0;
+    for (final f in existing) {
+      final normalized = f.noFaktur.trim().toUpperCase();
+      if (normalized.startsWith(prefix)) {
+        final suffix = int.tryParse(normalized.substring(prefix.length));
+        if (suffix != null && suffix > maxSeq) {
+          maxSeq = suffix;
+        }
+      }
+    }
+    final nextSeq = (maxSeq + 1).toString().padLeft(3, '0');
+    return '$prefix$nextSeq';
+  }
 
   /// Mencatat pembelian barang masuk dari supplier (`faktur` + `detail_faktur`)
   /// dan langsung menambah stok barang secara lokal, lalu auto-sync saat online.
@@ -587,42 +733,139 @@ class InventoryRepository {
     required Petugas petugas,
     required List<({Barang barang, int quantity})> items,
   }) async {
+    final cleanNoFaktur = _validateNoFaktur(noFaktur);
+    final cleanTanggal = _validateTransactionDate(
+      tanggalFaktur,
+      'Tanggal faktur',
+    );
     if (supplier.idSupplier == null || petugas.idPetugas == null) {
-      throw ArgumentError('Supplier dan Petugas harus tersimpan di database.');
+      throw const MasterDataValidationException(
+        'Supplier dan Petugas harus tersimpan di database.',
+      );
     }
-    final now = DateTime.now();
-    final details = items.map((entry) {
-      final barang = entry.barang;
-      if (barang.idBarang == null) {
-        throw ArgumentError('Barang "${barang.namaBarang}" belum memiliki ID.');
-      }
-      return DetailFaktur(
+    await _assertUniqueNoFaktur(cleanNoFaktur);
+    final details = _buildValidatedDetails<DetailFaktur>(
+      items: items
+          .map((e) => (barang: e.barang, qty: e.quantity))
+          .toList(growable: false),
+      docName: 'faktur',
+      builder: (barang, qty, subtotal) => DetailFaktur(
         idBarang: barang.idBarang!,
-        jumlah: barang.hargaSatuan * entry.quantity,
-        quantity: entry.quantity,
+        jumlah: subtotal,
+        quantity: qty,
         barangRemoteId: barang.remoteId,
         namaBarang: barang.namaBarang,
         satuan: barang.satuan,
-      );
-    }).toList();
+      ),
+    );
+
+    final total = Faktur.hitungTotal(details);
+    _assertFiniteTotal(total, 'faktur');
 
     final faktur = Faktur(
-      noFaktur: noFaktur.trim(),
-      tanggalFaktur: tanggalFaktur,
-      total: Faktur.hitungTotal(details),
+      noFaktur: cleanNoFaktur,
+      tanggalFaktur: cleanTanggal,
+      total: total,
       idSupplier: supplier.idSupplier!,
       idPetugas: petugas.idPetugas!,
       remoteId: _uuid.v4(),
       supplierRemoteId: supplier.remoteId,
       petugasRemoteId: petugas.remoteId,
       syncStatus: SyncStatus.pending,
-      updatedAt: now,
+      updatedAt: DateTime.now(),
       details: details,
     );
 
-    final idFaktur = await _dbHelper.insertFakturTransaction(faktur, details);
-    await _afterLocalWrite();
-    return idFaktur;
+    try {
+      final idFaktur = await _dbHelper.insertFakturTransaction(faktur, details);
+      await _afterLocalWrite();
+      return idFaktur;
+    } on StateError catch (e) {
+      throw MasterDataValidationException(e.message);
+    } on ArgumentError catch (e) {
+      throw MasterDataValidationException(e.message.toString());
+    }
+  }
+
+  /// Memperbarui header dan rincian `faktur` masuk serta merekonsiliasi selisih
+  /// stok barang di SQLite lokal sebelum sinkronisasi Cloud.
+  Future<void> updateFaktur({
+    required Faktur existing,
+    required String noFaktur,
+    required String tanggalFaktur,
+    required Supplier supplier,
+    required Petugas petugas,
+    required List<({Barang barang, int quantity})> items,
+  }) async {
+    if (existing.idFaktur == null) {
+      throw const MasterDataValidationException(
+        'Faktur belum tersimpan di database lokal.',
+      );
+    }
+    final cleanNoFaktur = _validateNoFaktur(noFaktur);
+    final cleanTanggal = _validateTransactionDate(
+      tanggalFaktur,
+      'Tanggal faktur',
+    );
+    if (supplier.idSupplier == null || petugas.idPetugas == null) {
+      throw const MasterDataValidationException(
+        'Supplier dan Petugas harus tersimpan di database.',
+      );
+    }
+    await _assertUniqueNoFaktur(
+      cleanNoFaktur,
+      excludeIdFaktur: existing.idFaktur,
+    );
+    final details = _buildValidatedDetails<DetailFaktur>(
+      items: items
+          .map((e) => (barang: e.barang, qty: e.quantity))
+          .toList(growable: false),
+      docName: 'faktur',
+      builder: (barang, qty, subtotal) => DetailFaktur(
+        idFaktur: existing.idFaktur,
+        idBarang: barang.idBarang!,
+        jumlah: subtotal,
+        quantity: qty,
+        barangRemoteId: barang.remoteId,
+        namaBarang: barang.namaBarang,
+        satuan: barang.satuan,
+      ),
+    );
+
+    final total = Faktur.hitungTotal(details);
+    _assertFiniteTotal(total, 'faktur');
+
+    final updated = existing.copyWith(
+      noFaktur: cleanNoFaktur,
+      tanggalFaktur: cleanTanggal,
+      total: total,
+      idSupplier: supplier.idSupplier!,
+      idPetugas: petugas.idPetugas!,
+      supplierRemoteId: supplier.remoteId,
+      petugasRemoteId: petugas.remoteId,
+      syncStatus: SyncStatus.pending,
+      updatedAt: DateTime.now(),
+      details: details,
+    );
+
+    try {
+      await _dbHelper.updateFakturTransaction(updated, details);
+      await _afterLocalWrite();
+    } on StateError catch (e) {
+      throw MasterDataValidationException(e.message);
+    } on ArgumentError catch (e) {
+      throw MasterDataValidationException(e.message.toString());
+    }
+  }
+
+  /// Menghapus `faktur` beserta `detail_faktur` dan membalikkan stok barang masuk.
+  Future<void> deleteFaktur(int idFaktur) async {
+    try {
+      await _dbHelper.deleteFakturTransaction(idFaktur);
+      await _afterLocalWrite();
+    } on StateError catch (e) {
+      throw MasterDataValidationException(e.message);
+    }
   }
 
   /// Mencatat penjualan kasir ke customer (`nota` + `detail_nota`)
@@ -633,41 +876,123 @@ class InventoryRepository {
     required Petugas petugas,
     required List<({Barang barang, int banyaknya})> items,
   }) async {
+    final cleanTanggal = _validateTransactionDate(tanggalNota, 'Tanggal nota');
     if (customer.idCustomer == null || petugas.idPetugas == null) {
-      throw ArgumentError('Customer dan Petugas harus tersimpan di database.');
+      throw const MasterDataValidationException(
+        'Customer dan Petugas harus tersimpan di database.',
+      );
     }
-    final now = DateTime.now();
-    final details = items.map((entry) {
-      final barang = entry.barang;
-      if (barang.idBarang == null) {
-        throw ArgumentError('Barang "${barang.namaBarang}" belum memiliki ID.');
-      }
-      return DetailNota(
+    final details = _buildValidatedDetails<DetailNota>(
+      items: items
+          .map((e) => (barang: e.barang, qty: e.banyaknya))
+          .toList(growable: false),
+      docName: 'nota',
+      builder: (barang, qty, subtotal) => DetailNota(
         idBarang: barang.idBarang!,
-        jumlah: barang.hargaSatuan * entry.banyaknya,
-        banyaknya: entry.banyaknya,
+        jumlah: subtotal,
+        banyaknya: qty,
         barangRemoteId: barang.remoteId,
         namaBarang: barang.namaBarang,
         satuan: barang.satuan,
-      );
-    }).toList();
+      ),
+    );
+
+    final total = Nota.hitungTotal(details);
+    _assertFiniteTotal(total, 'nota');
 
     final nota = Nota(
-      tanggalNota: tanggalNota,
-      total: Nota.hitungTotal(details),
+      tanggalNota: cleanTanggal,
+      total: total,
       idPetugas: petugas.idPetugas!,
       idCustomer: customer.idCustomer!,
       remoteId: _uuid.v4(),
       petugasRemoteId: petugas.remoteId,
       customerRemoteId: customer.remoteId,
       syncStatus: SyncStatus.pending,
-      updatedAt: now,
+      updatedAt: DateTime.now(),
       details: details,
     );
 
-    final idNota = await _dbHelper.insertNotaTransaction(nota, details);
-    await _afterLocalWrite();
-    return idNota;
+    try {
+      final idNota = await _dbHelper.insertNotaTransaction(nota, details);
+      await _afterLocalWrite();
+      return idNota;
+    } on StateError catch (e) {
+      throw MasterDataValidationException(e.message);
+    } on ArgumentError catch (e) {
+      throw MasterDataValidationException(e.message.toString());
+    }
+  }
+
+  /// Memperbarui header & detail `nota` kasir serta mengembalikan stok lama
+  /// sebelum memotong stok baru secara atomik.
+  Future<void> updateNota({
+    required Nota existing,
+    required String tanggalNota,
+    required Customer customer,
+    required Petugas petugas,
+    required List<({Barang barang, int banyaknya})> items,
+  }) async {
+    if (existing.idNota == null) {
+      throw const MasterDataValidationException(
+        'Nota belum tersimpan di database lokal.',
+      );
+    }
+    final cleanTanggal = _validateTransactionDate(tanggalNota, 'Tanggal nota');
+    if (customer.idCustomer == null || petugas.idPetugas == null) {
+      throw const MasterDataValidationException(
+        'Customer dan Petugas harus tersimpan di database.',
+      );
+    }
+    final details = _buildValidatedDetails<DetailNota>(
+      items: items
+          .map((e) => (barang: e.barang, qty: e.banyaknya))
+          .toList(growable: false),
+      docName: 'nota',
+      builder: (barang, qty, subtotal) => DetailNota(
+        idNota: existing.idNota,
+        idBarang: barang.idBarang!,
+        jumlah: subtotal,
+        banyaknya: qty,
+        barangRemoteId: barang.remoteId,
+        namaBarang: barang.namaBarang,
+        satuan: barang.satuan,
+      ),
+    );
+
+    final total = Nota.hitungTotal(details);
+    _assertFiniteTotal(total, 'nota');
+
+    final updated = existing.copyWith(
+      tanggalNota: cleanTanggal,
+      total: total,
+      idPetugas: petugas.idPetugas!,
+      idCustomer: customer.idCustomer!,
+      petugasRemoteId: petugas.remoteId,
+      customerRemoteId: customer.remoteId,
+      syncStatus: SyncStatus.pending,
+      updatedAt: DateTime.now(),
+      details: details,
+    );
+
+    try {
+      await _dbHelper.updateNotaTransaction(updated, details);
+      await _afterLocalWrite();
+    } on StateError catch (e) {
+      throw MasterDataValidationException(e.message);
+    } on ArgumentError catch (e) {
+      throw MasterDataValidationException(e.message.toString());
+    }
+  }
+
+  /// Menghapus `nota` beserta `detail_nota` dan mengembalikan stok barang terjual.
+  Future<void> deleteNota(int idNota) async {
+    try {
+      await _dbHelper.deleteNotaTransaction(idNota);
+      await _afterLocalWrite();
+    } on StateError catch (e) {
+      throw MasterDataValidationException(e.message);
+    }
   }
 
   Future<void> _afterLocalWrite() async {

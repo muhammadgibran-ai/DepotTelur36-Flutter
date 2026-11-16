@@ -13,9 +13,14 @@ import 'package:depot_telur_36/screens/auth/welcome_screen.dart';
 import 'package:depot_telur_36/screens/master/atur_harga_screen.dart';
 import 'package:depot_telur_36/screens/master/barang_form_screen.dart';
 import 'package:depot_telur_36/screens/master/master_data_tab_view.dart';
+import 'package:depot_telur_36/screens/transaksi/faktur_masuk_screen.dart';
+import 'package:depot_telur_36/screens/transaksi/kasir_nota_screen.dart';
+import 'package:depot_telur_36/screens/transaksi/riwayat_faktur_screen.dart';
+import 'package:depot_telur_36/screens/transaksi/riwayat_nota_screen.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/viewmodels/dashboard_view_model.dart';
 import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
+import 'package:depot_telur_36/viewmodels/transaction_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
 import 'package:depot_telur_36/widgets/dashboard_widgets.dart';
@@ -53,11 +58,13 @@ class RoleHomeShellScreen extends StatefulWidget {
     required this.initialSession,
     this.viewModelOverride,
     this.masterViewModelOverride,
+    this.transactionViewModelOverride,
   });
 
   final AuthSession initialSession;
   final DashboardViewModel? viewModelOverride;
   final MasterCrudViewModel? masterViewModelOverride;
+  final TransactionCrudViewModel? transactionViewModelOverride;
 
   @override
   State<RoleHomeShellScreen> createState() => _RoleHomeShellScreenState();
@@ -66,6 +73,7 @@ class RoleHomeShellScreen extends StatefulWidget {
 class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
   DashboardViewModel? _ownedViewModel;
   MasterCrudViewModel? _ownedMasterViewModel;
+  TransactionCrudViewModel? _ownedTransactionViewModel;
   DashboardViewModel? _bridgeListenedVm;
   DashboardViewModel? _tabTrackedVm;
   DashboardTabId? _lastTrackedTab;
@@ -76,6 +84,8 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
   DashboardViewModel get _vm => widget.viewModelOverride ?? _ownedViewModel!;
   MasterCrudViewModel get _masterVm =>
       widget.masterViewModelOverride ?? _ownedMasterViewModel!;
+  TransactionCrudViewModel get _transactionVm =>
+      widget.transactionViewModelOverride ?? _ownedTransactionViewModel!;
 
   @override
   void initState() {
@@ -113,6 +123,23 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
         unawaited(_ownedMasterViewModel!.loadData(silent: true));
       }
     }
+
+    if (widget.transactionViewModelOverride == null) {
+      if (repo != null) {
+        _ownedTransactionViewModel = TransactionCrudViewModel.fromRepository(
+          session: widget.initialSession,
+          repository: repo,
+        );
+        unawaited(_ownedTransactionViewModel!.loadData());
+      } else {
+        _ownedTransactionViewModel = TransactionCrudViewModel(
+          session: widget.initialSession,
+          dataSource: ReadOnlyTransactionBridgeDataSource(_vm),
+        );
+        _bridgeListenedVm ??= _vm..addListener(_onBridgeDashboardChanged);
+        unawaited(_ownedTransactionViewModel!.loadData(silent: true));
+      }
+    }
     _attachTabTracker(_vm);
   }
 
@@ -143,6 +170,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     if (masterVm != null && mounted) {
       unawaited(masterVm.loadData(silent: true));
     }
+    final txVm = _ownedTransactionViewModel;
+    if (txVm != null && mounted) {
+      unawaited(txVm.loadData(silent: true));
+    }
   }
 
   void _onSearchFocusChanged() {
@@ -160,6 +191,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
         oldWidget.initialSession != widget.initialSession) {
       _ownedMasterViewModel!.updateSession(widget.initialSession);
     }
+    if (_ownedTransactionViewModel != null &&
+        oldWidget.initialSession != widget.initialSession) {
+      _ownedTransactionViewModel!.updateSession(widget.initialSession);
+    }
     if (widget.viewModelOverride != null &&
         widget.viewModelOverride != oldWidget.viewModelOverride) {
       if (_searchController.text != widget.viewModelOverride!.searchQuery) {
@@ -167,16 +202,28 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
       }
       if (_bridgeListenedVm != null) {
         _bridgeListenedVm!.removeListener(_onBridgeDashboardChanged);
-        _ownedMasterViewModel?.dispose();
-        _ownedMasterViewModel = MasterCrudViewModel(
-          session: widget.initialSession,
-          dataSource: ReadOnlyDashboardBridgeDataSource(
-            widget.viewModelOverride!,
-          ),
-        );
+        if (_ownedMasterViewModel != null) {
+          _ownedMasterViewModel!.dispose();
+          _ownedMasterViewModel = MasterCrudViewModel(
+            session: widget.initialSession,
+            dataSource: ReadOnlyDashboardBridgeDataSource(
+              widget.viewModelOverride!,
+            ),
+          );
+          unawaited(_ownedMasterViewModel!.loadData(silent: true));
+        }
+        if (_ownedTransactionViewModel != null) {
+          _ownedTransactionViewModel!.dispose();
+          _ownedTransactionViewModel = TransactionCrudViewModel(
+            session: widget.initialSession,
+            dataSource: ReadOnlyTransactionBridgeDataSource(
+              widget.viewModelOverride!,
+            ),
+          );
+          unawaited(_ownedTransactionViewModel!.loadData(silent: true));
+        }
         _bridgeListenedVm = widget.viewModelOverride!
           ..addListener(_onBridgeDashboardChanged);
-        unawaited(_ownedMasterViewModel!.loadData(silent: true));
       }
       _attachTabTracker(widget.viewModelOverride!);
     }
@@ -189,6 +236,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     if (authSession != null) {
       _ownedViewModel?.updateSession(authSession);
       _ownedMasterViewModel?.updateSession(authSession);
+      _ownedTransactionViewModel?.updateSession(authSession);
     }
   }
 
@@ -199,6 +247,7 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     _searchFocusNode.removeListener(_onSearchFocusChanged);
     _searchFocusNode.dispose();
     _searchController.dispose();
+    _ownedTransactionViewModel?.dispose();
     _ownedMasterViewModel?.dispose();
     _ownedViewModel?.dispose();
     super.dispose();
@@ -233,11 +282,21 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
   }
 
   void _handleRestockRequested(String itemName, int stock, String unit) {
+    _transactionVm.prefillFakturRestock(itemName);
     if (!_vm.isOwner) {
       _vm.selectTab(DashboardTabId.faktur);
+      _showFeedbackSnack(
+        'Siap restock $itemName (sisa $stock $unit) melalui modul Faktur masuk.',
+      );
+      return;
     }
-    _showFeedbackSnack(
-      'Siap restock $itemName (sisa $stock $unit) melalui modul Faktur masuk.',
+    Navigator.of(context).push<void>(
+      buildAuthRoute<void>(
+        FakturMasukScreen(
+          viewModel: _transactionVm,
+          onTransactionSaved: _vm.loadDashboardData,
+        ),
+      ),
     );
   }
 
@@ -276,26 +335,35 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
         _handleSelectTab(DashboardTabId.master);
         return;
       case DashboardShortcutId.riwayatFaktur:
-      case DashboardShortcutId.riwayatNota:
-        showModalBottomSheet<void>(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: AppColors.surface,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          builder: (sheetContext) {
-            return _ShortcutDetailSheet(
-              shortcut: authorized,
-              vm: _vm,
-              onNavigateTab: authorized.targetTab == null
+        await Navigator.of(context).push<void>(
+          buildAuthRoute<void>(
+            RiwayatFakturScreen(
+              viewModel: _transactionVm,
+              onCreateFaktur: _vm.isOwner
                   ? null
                   : () {
-                      Navigator.of(sheetContext).pop();
-                      _handleSelectTab(authorized.targetTab!);
+                      Navigator.of(context).pop();
+                      _handleSelectTab(DashboardTabId.faktur);
                     },
-            );
-          },
+              onTransactionChanged: _vm.loadDashboardData,
+            ),
+          ),
+        );
+        return;
+      case DashboardShortcutId.riwayatNota:
+        await Navigator.of(context).push<void>(
+          buildAuthRoute<void>(
+            RiwayatNotaScreen(
+              viewModel: _transactionVm,
+              onCreateNota: _vm.isOwner
+                  ? null
+                  : () {
+                      Navigator.of(context).pop();
+                      _handleSelectTab(DashboardTabId.kasir);
+                    },
+              onTransactionChanged: _vm.loadDashboardData,
+            ),
+          ),
         );
         return;
     }
@@ -364,10 +432,6 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
             ? Duration.zero
             : const Duration(milliseconds: 220);
 
-        final isMasterTab =
-            _vm.activeTab == DashboardTabId.master ||
-            _vm.activeTab == DashboardTabId.stok;
-
         return PopScope(
           canPop:
               _vm.activeTab == DashboardTabId.beranda && !isSubmittingSignOut,
@@ -399,88 +463,107 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
                   ),
                 );
               },
-              child: isMasterTab
-                  ? MasterDataTabView(
-                      key: ValueKey('master_tab_${_vm.activeTab.name}'),
-                      viewModel: _masterVm,
-                      onRefreshRequested: _vm.loadDashboardData,
-                    )
-                  : Column(
-                      key: const ValueKey('dashboard_main_shell'),
-                      children: [
-                        _DashboardHeader(
-                          session: session,
-                          searchController: _searchController,
-                          searchFocusNode: _searchFocusNode,
-                          searchQuery: _vm.searchQuery,
-                          unreadCount: _vm.unreadCount,
-                          unreadBadgeText: _vm.unreadBadgeText,
-                          hasActiveFilter:
-                              _vm.activeFilter != DashboardQuickFilter.semua ||
-                              _vm.isFilterBarExpanded,
-                          isSigningOut: isSubmittingSignOut,
-                          onSearchChanged: _handleSearchChanged,
-                          onClearSearch: () {
-                            HapticFeedback.selectionClick();
-                            _searchController.clear();
-                            _vm.clearSearch();
-                          },
-                          onToggleFilter: _vm.toggleFilterBar,
-                          onOpenNotifications: _openNotificationSheet,
-                          onSignOut: isSubmittingSignOut ? null : _handleSignOut,
-                        ),
-                        AnimatedSize(
-                          duration: filterAnimationDuration,
-                          curve: AppTokens.arrivalCurve,
-                          clipBehavior: Clip.hardEdge,
-                          child:
-                              (_vm.isFilterBarExpanded ||
-                                  _vm.activeFilter !=
-                                      DashboardQuickFilter.semua)
-                              ? Padding(
-                                  padding: const EdgeInsets.only(top: 10),
-                                  child: QuickFilterChipBar(
-                                    activeFilter: _vm.activeFilter,
-                                    onSelected: _vm.setQuickFilter,
-                                  ),
-                                )
-                              : const SizedBox.shrink(),
-                        ),
-                        Expanded(
-                          child: RefreshIndicator(
-                            color: AppColors.ink,
-                            backgroundColor: AppColors.surface,
-                            onRefresh: _vm.loadDashboardData,
-                            child: AnimatedSwitcher(
-                              duration: disableAnimations
-                                  ? Duration.zero
-                                  : const Duration(milliseconds: 200),
-                              switchInCurve: AppTokens.arrivalCurve,
-                              switchOutCurve: Curves.easeIn,
-                              transitionBuilder: (child, animation) {
-                                if (disableAnimations) {
-                                  return FadeTransition(
-                                    opacity: animation,
-                                    child: child,
-                                  );
-                                }
+              child: switch (_vm.activeTab) {
+                DashboardTabId.master || DashboardTabId.stok =>
+                  MasterDataTabView(
+                    key: ValueKey('master_tab_${_vm.activeTab.name}'),
+                    viewModel: _masterVm,
+                    onRefreshRequested: _vm.loadDashboardData,
+                  ),
+                DashboardTabId.kasir => KasirNotaView(
+                    key: const ValueKey('tx_tab_kasir'),
+                    viewModel: _transactionVm,
+                    embedded: true,
+                    onTransactionSaved: _vm.loadDashboardData,
+                  ),
+                DashboardTabId.faktur => FakturMasukView(
+                    key: const ValueKey('tx_tab_faktur'),
+                    viewModel: _transactionVm,
+                    embedded: true,
+                    onTransactionSaved: _vm.loadDashboardData,
+                  ),
+                DashboardTabId.nota => RiwayatNotaView(
+                    key: const ValueKey('tx_tab_nota'),
+                    viewModel: _transactionVm,
+                    embedded: true,
+                    onTransactionChanged: _vm.loadDashboardData,
+                  ),
+                DashboardTabId.beranda || DashboardTabId.omzet => Column(
+                    key: const ValueKey('dashboard_main_shell'),
+                    children: [
+                      _DashboardHeader(
+                        session: session,
+                        searchController: _searchController,
+                        searchFocusNode: _searchFocusNode,
+                        searchQuery: _vm.searchQuery,
+                        unreadCount: _vm.unreadCount,
+                        unreadBadgeText: _vm.unreadBadgeText,
+                        hasActiveFilter:
+                            _vm.activeFilter != DashboardQuickFilter.semua ||
+                            _vm.isFilterBarExpanded,
+                        isSigningOut: isSubmittingSignOut,
+                        onSearchChanged: _handleSearchChanged,
+                        onClearSearch: () {
+                          HapticFeedback.selectionClick();
+                          _searchController.clear();
+                          _vm.clearSearch();
+                        },
+                        onToggleFilter: _vm.toggleFilterBar,
+                        onOpenNotifications: _openNotificationSheet,
+                        onSignOut: isSubmittingSignOut ? null : _handleSignOut,
+                      ),
+                      AnimatedSize(
+                        duration: filterAnimationDuration,
+                        curve: AppTokens.arrivalCurve,
+                        clipBehavior: Clip.hardEdge,
+                        child:
+                            (_vm.isFilterBarExpanded ||
+                                _vm.activeFilter != DashboardQuickFilter.semua)
+                            ? Padding(
+                                padding: const EdgeInsets.only(top: 10),
+                                child: QuickFilterChipBar(
+                                  activeFilter: _vm.activeFilter,
+                                  onSelected: _vm.setQuickFilter,
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                      Expanded(
+                        child: RefreshIndicator(
+                          color: AppColors.ink,
+                          backgroundColor: AppColors.surface,
+                          onRefresh: _vm.loadDashboardData,
+                          child: AnimatedSwitcher(
+                            duration: disableAnimations
+                                ? Duration.zero
+                                : const Duration(milliseconds: 200),
+                            switchInCurve: AppTokens.arrivalCurve,
+                            switchOutCurve: Curves.easeIn,
+                            transitionBuilder: (child, animation) {
+                              if (disableAnimations) {
                                 return FadeTransition(
                                   opacity: animation,
-                                  child: SlideTransition(
-                                    position: Tween<Offset>(
-                                      begin: Offset(0.03 * _tabSlideSign, 0),
-                                      end: Offset.zero,
-                                    ).animate(animation),
-                                    child: child,
-                                  ),
+                                  child: child,
                                 );
-                              },
-                              child: _buildTabScrollView(context, session),
-                            ),
+                              }
+                              return FadeTransition(
+                                opacity: animation,
+                                child: SlideTransition(
+                                  position: Tween<Offset>(
+                                    begin: Offset(0.03 * _tabSlideSign, 0),
+                                    end: Offset.zero,
+                                  ).animate(animation),
+                                  child: child,
+                                ),
+                              );
+                            },
+                            child: _buildTabScrollView(context, session),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
+                  ),
+              },
             ),
             bottomNavigationBar: FloatingTabBar(
               tabs: _vm.tabs,
@@ -497,10 +580,10 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
     final tabChildren = switch (_vm.activeTab) {
       DashboardTabId.beranda => _buildBerandaContent(context, session),
       DashboardTabId.omzet => _buildOwnerOmzetContent(),
-      DashboardTabId.nota => _buildOwnerNotaContent(),
-      DashboardTabId.master => const <Widget>[],
-      DashboardTabId.kasir => _buildOperatorKasirContent(),
-      DashboardTabId.faktur => _buildOperatorFakturContent(),
+      DashboardTabId.nota ||
+      DashboardTabId.master ||
+      DashboardTabId.kasir ||
+      DashboardTabId.faktur ||
       DashboardTabId.stok => const <Widget>[],
     };
 
@@ -768,121 +851,6 @@ class _RoleHomeShellScreenState extends State<RoleHomeShellScreen> {
         rightValue: '${m.lowStockCount} Barang',
       ),
     ];
-  }
-
-  List<Widget> _buildOwnerNotaContent() {
-    final notas = _vm.filteredNotas;
-    return [
-      _ModuleStagingBanner(
-        badge: 'Khusus Owner · Audit Nota',
-        title: 'Riwayat Nota Penjualan (${notas.length})',
-        subtitle:
-            'Pencatatan kasir & filter tanggal penuh tersedia pada Fungsi Kasir.',
-      ),
-      const SizedBox(height: 14),
-      if (notas.isEmpty)
-        const _EmptyModuleCard(
-          icon: Icons.receipt_long_rounded,
-          title: 'Belum ada transaksi Nota',
-          subtitle: 'Nota penjualan dari kasir akan tampil di sini secara real-time.',
-        )
-      else
-        for (final nota in notas) ...[
-          _TransactionSummaryTile(
-            title:
-                'Nota #${nota.idNota ?? _shortTag(nota.remoteId)}${(nota.namaCustomer ?? '').isNotEmpty ? ' · ${nota.namaCustomer}' : ''}',
-            subtitle: nota.tanggalNota,
-            amountText: formatRupiah(nota.total),
-          ),
-          const SizedBox(height: 8),
-        ],
-    ];
-  }
-
-  List<Widget> _buildOperatorKasirContent() {
-    final m = _vm.metrics;
-    return [
-      const _ModuleStagingBanner(
-        badge: 'Operasional Kasir',
-        title: 'Meja Kasir Cepat',
-        subtitle:
-            'Pantau kesiapan stok sebelum membuka transaksi penjualan pada modul Kasir.',
-      ),
-      const SizedBox(height: 14),
-      _MetricTileRow(
-        leftTitle: 'Katalog Siap Jual',
-        leftValue: '${m.totalBarang} Barang',
-        rightTitle: 'Nota Tersimpan',
-        rightValue: '${m.totalNotaCount} Nota',
-      ),
-      const SizedBox(height: 12),
-      if (_vm.normalStockItems.isNotEmpty)
-        HomeStockListCard(
-          items: _vm.normalStockItems,
-          onItemTap: _showBarangQuickSheet,
-        ),
-    ];
-  }
-
-  List<Widget> _buildOperatorFakturContent() {
-    final fakturs = _vm.filteredFakturs;
-    final lowItems = _vm.lowStockItems;
-    return [
-      const _ModuleStagingBanner(
-        badge: 'Operasional Gudang',
-        title: 'Faktur Stok Masuk Supplier',
-        subtitle:
-            'Daftar item prioritas restock dan riwayat faktur barang masuk lokal.',
-      ),
-      const SizedBox(height: 14),
-      if (lowItems.isNotEmpty) ...[
-        Text(
-          'Prioritas Restock (${lowItems.length})',
-          style: AppTypography.heading(
-            fontSize: 14.5,
-            fontWeight: FontWeight.w700,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 8),
-        for (final item in lowItems) ...[
-          LowStockAlertCard(
-            barang: item,
-            onRestock: () => _handleRestockRequested(
-              item.namaBarang,
-              item.stokBarang,
-              item.satuan,
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-        const SizedBox(height: 8),
-      ],
-      if (fakturs.isEmpty)
-        const _EmptyModuleCard(
-          icon: Icons.note_add_rounded,
-          title: 'Belum ada Faktur Masuk',
-          subtitle: 'Pencatatan restock dari supplier akan terdata di sini.',
-        )
-      else
-        for (final faktur in fakturs) ...[
-          _TransactionSummaryTile(
-            title: faktur.noFaktur.trim().isNotEmpty
-                ? faktur.noFaktur
-                : 'Faktur #${faktur.idFaktur ?? _shortTag(faktur.remoteId)}',
-            subtitle:
-                '${faktur.tanggalFaktur}${(faktur.namaSupplier ?? '').isNotEmpty ? ' · ${faktur.namaSupplier}' : ''}',
-            amountText: formatRupiah(faktur.total),
-          ),
-          const SizedBox(height: 8),
-        ],
-    ];
-  }
-
-  String _shortTag(String raw) {
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty) return '-';
-    return trimmed.length <= 6 ? trimmed : trimmed.substring(0, 6);
   }
 
   void _showBarangQuickSheet(Barang barang) {
@@ -1668,245 +1636,6 @@ class _MetricTile extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _TransactionSummaryTile extends StatelessWidget {
-  const _TransactionSummaryTile({
-    required this.title,
-    required this.subtitle,
-    required this.amountText,
-  });
-
-  final String title;
-  final String subtitle;
-  final String amountText;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.borderSubtle),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: AppTypography.heading(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: AppTypography.body(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            amountText,
-            style: AppTypography.body(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: AppColors.ink,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _EmptyModuleCard extends StatelessWidget {
-  const _EmptyModuleCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.borderSubtle),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, size: 32, color: AppColors.textSecondary),
-          const SizedBox(height: 8),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: AppTypography.heading(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            textAlign: TextAlign.center,
-            style: AppTypography.body(
-              fontSize: 12.5,
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ShortcutDetailSheet extends StatelessWidget {
-  const _ShortcutDetailSheet({
-    required this.shortcut,
-    required this.vm,
-    this.onNavigateTab,
-  });
-
-  final DashboardShortcutSpec shortcut;
-  final DashboardViewModel vm;
-  final VoidCallback? onNavigateTab;
-
-  @override
-  Widget build(BuildContext context) {
-    final previewLines = switch (shortcut.id) {
-      DashboardShortcutId.dataSupplier || DashboardShortcutId.supplier =>
-        vm.allSuppliers
-            .take(5)
-            .map((s) => '${s.namaSupplier} · ${s.noTelpSupplier}')
-            .toList(),
-      DashboardShortcutId.pelanggan =>
-        vm.allCustomers.take(5).map((c) => c.namaCustomer).toList(),
-      DashboardShortcutId.akunPetugas =>
-        vm.allPetugas
-            .take(5)
-            .map((p) => '${p.namaPetugas} (${p.role.value})')
-            .toList(),
-      DashboardShortcutId.aturHarga =>
-        vm.allBarang
-            .take(5)
-            .map(
-              (b) =>
-                  '${b.namaBarang} · ${formatRupiah(b.hargaSatuan)}/${b.satuan}',
-            )
-            .toList(),
-      DashboardShortcutId.riwayatNota =>
-        vm.allNotas
-            .take(5)
-            .map((n) => 'Nota #${n.idNota ?? '-'} · ${formatRupiah(n.total)}')
-            .toList(),
-      DashboardShortcutId.riwayatFaktur =>
-        vm.allFakturs
-            .take(5)
-            .map(
-              (f) => 'Faktur #${f.idFaktur ?? '-'} · ${formatRupiah(f.total)}',
-            )
-            .toList(),
-    };
-
-    return SafeArea(
-      top: false,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.8,
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      shortcut.label,
-                      style: AppTypography.heading(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Tutup ringkasan menu',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                shortcut.description,
-                style: AppTypography.body(
-                  fontSize: 13,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              if (previewLines.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceWarm,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppColors.borderSubtle),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (final line in previewLines) ...[
-                        Text(
-                          '• $line',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTypography.body(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-              if (onNavigateTab != null) ...[
-                const SizedBox(height: 14),
-                TactilePillButton(
-                  label: 'Buka Tab Terkait',
-                  height: 48,
-                  onPressed: onNavigateTab,
-                ),
-              ],
-            ],
-          ),
-        ),
       ),
     );
   }

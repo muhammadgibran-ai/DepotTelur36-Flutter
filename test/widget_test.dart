@@ -21,13 +21,21 @@ import 'package:depot_telur_36/screens/master/barang_form_screen.dart';
 import 'package:depot_telur_36/screens/master/master_data_tab_view.dart';
 import 'package:depot_telur_36/screens/master/petugas_form_screen.dart';
 import 'package:depot_telur_36/screens/master/supplier_form_screen.dart';
+import 'package:depot_telur_36/screens/transaksi/detail_faktur_screen.dart';
+import 'package:depot_telur_36/screens/transaksi/detail_nota_screen.dart';
+import 'package:depot_telur_36/screens/transaksi/faktur_masuk_screen.dart';
+import 'package:depot_telur_36/screens/transaksi/kasir_nota_screen.dart';
+import 'package:depot_telur_36/screens/transaksi/riwayat_faktur_screen.dart';
+import 'package:depot_telur_36/screens/transaksi/riwayat_nota_screen.dart';
 import 'package:depot_telur_36/services/auth_gateway.dart';
 import 'package:depot_telur_36/services/sync_service.dart';
 import 'package:depot_telur_36/viewmodels/auth_view_model.dart';
 import 'package:depot_telur_36/viewmodels/master_crud_view_model.dart';
+import 'package:depot_telur_36/viewmodels/transaction_crud_view_model.dart';
 import 'package:depot_telur_36/widgets/auth_interactive_widgets.dart';
 import 'package:depot_telur_36/widgets/barang_thumbnail.dart';
 import 'package:depot_telur_36/widgets/dashboard_widgets.dart';
+import 'package:depot_telur_36/widgets/transaction_widgets.dart';
 import 'package:depot_telur_36/widgets/ux_motion_widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -853,7 +861,8 @@ void main() {
       // Tap Restock pada LowStockAlertCard -> pindah ke Faktur + SnackBar
       await tester.tap(find.text('Restock').first);
       await tester.pumpAndSettle();
-      expect(find.text('Faktur Stok Masuk Supplier'), findsOneWidget);
+      expect(find.text('Faktur Barang Masuk'), findsOneWidget);
+      expect(find.text('Minyak Goreng Kemasan 1 Liter'), findsOneWidget);
       expect(
         find.textContaining('Siap restock Minyak Goreng Kemasan 1 Liter'),
         findsOneWidget,
@@ -1156,6 +1165,67 @@ void main() {
       await auditScreen(
         tester,
         AturHargaScreen(viewModel: ownerVm),
+      );
+    });
+
+    testWidgets('Layar Transaksi CRUD (07, 08, 16, 17, 18, 19) memenuhi standar aksesibilitas', (
+      tester,
+    ) async {
+      final session = AuthSession(
+        uid: 'tx-audit-kasir',
+        email: 'kasir.tx@depottelur36.com',
+        accountId: 'kasir_tx',
+        displayName: 'Kasir Audit',
+        role: UserRole.petugas,
+        petugasRemoteId: 'tx-audit-petugas',
+        provider: AuthProviderType.emailPassword,
+        signedInAt: DateTime(2026, 2, 16),
+      );
+      final txVm = TransactionCrudViewModel.fromRepository(
+        session: session,
+        repository: inventoryRepository,
+      );
+      addTearDown(txVm.dispose);
+      await tester.runAsync(() async {
+        await inventoryRepository.savePetugas(
+          existingRemoteId: 'tx-audit-petugas',
+          namaPetugas: 'Kasir Audit',
+          role: UserRole.petugas,
+          pin: '1234',
+          email: 'kasir.tx@depottelur36.com',
+        );
+        await txVm.loadData();
+        final barang = txVm.barangs.first;
+        final supplier = txVm.suppliers.first;
+        final customer = txVm.customers.first;
+        final petugas = txVm.activePetugas!;
+        await inventoryRepository.createFaktur(
+          noFaktur: 'FKT-AUDIT-01',
+          tanggalFaktur: '2026-02-18',
+          supplier: supplier,
+          petugas: petugas,
+          items: [(barang: barang, quantity: 5)],
+        );
+        await inventoryRepository.createNota(
+          tanggalNota: '2026-02-18',
+          customer: customer,
+          petugas: petugas,
+          items: [(barang: barang, banyaknya: 2)],
+        );
+        await txVm.loadData();
+      });
+
+      await auditScreen(tester, KasirNotaScreen(viewModel: txVm));
+      await auditScreen(tester, FakturMasukScreen(viewModel: txVm));
+      await auditScreen(tester, RiwayatNotaScreen(viewModel: txVm));
+      await auditScreen(tester, RiwayatFakturScreen(viewModel: txVm));
+      await auditScreen(
+        tester,
+        DetailNotaScreen(viewModel: txVm, nota: txVm.notas.first),
+      );
+      await auditScreen(
+        tester,
+        DetailFakturScreen(viewModel: txVm, faktur: txVm.fakturs.first),
       );
     });
   });
@@ -1890,6 +1960,306 @@ void main() {
 
         await verifyForms(disableAnimations: false);
         await verifyForms(disableAnimations: true);
+      },
+    );
+  });
+
+  group('Fungsi 4 - UI Transaksi CRUD (Nota, Faktur, Riwayat & Edit Detail)', () {
+    AuthSession kasirSession() => AuthSession(
+      uid: 'ui-kasir-tx',
+      email: 'kasir.tx@depottelur36.com',
+      accountId: 'kasir01',
+      displayName: 'Siti Kasir',
+      role: UserRole.petugas,
+      petugasRemoteId: 'ui-kasir-tx-remote',
+      provider: AuthProviderType.emailPassword,
+      signedInAt: DateTime(2026, 2, 16),
+    );
+
+    Future<TransactionCrudViewModel> setupTxVm(WidgetTester tester) async {
+      final vm = TransactionCrudViewModel.fromRepository(
+        session: kasirSession(),
+        repository: inventoryRepository,
+      );
+      addTearDown(vm.dispose);
+      await tester.runAsync(() async {
+        await inventoryRepository.savePetugas(
+          existingRemoteId: 'ui-kasir-tx-remote',
+          namaPetugas: 'Siti Kasir',
+          role: UserRole.petugas,
+          pin: '1122',
+          email: 'kasir.tx@depottelur36.com',
+        );
+        await vm.loadData();
+      });
+      return vm;
+    }
+
+    Future<void> flushAsync(
+      WidgetTester tester, {
+      bool Function()? until,
+    }) async {
+      for (var i = 0; i < 20; i++) {
+        await tester.pump();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        if (until != null && until()) break;
+      }
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> scrollAndTap(WidgetTester tester, Finder finder) async {
+      if (finder.evaluate().isEmpty) {
+        final scrollable = find.byType(Scrollable).first;
+        await tester.scrollUntilVisible(finder, 160, scrollable: scrollable);
+      } else {
+        await tester.ensureVisible(finder);
+      }
+      await tester.pumpAndSettle();
+      await tester.tap(finder);
+    }
+
+    testWidgets(
+      'Alur UI Kasir Nota -> Riwayat Nota -> Detail Edit -> Hapus Nota mengembalikan stok SQLite & memicu micro-interactions',
+      (tester) async {
+        final vm = await setupTxVm(tester);
+        final firstBarang = vm.barangs.first;
+        final initialStock = firstBarang.stokBarang;
+
+        await tester.pumpWidget(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider<SyncService>.value(value: syncService),
+              Provider<InventoryRepository>.value(value: inventoryRepository),
+              ChangeNotifierProvider<AuthViewModel>.value(value: viewModel),
+            ],
+            child: MaterialApp(
+              theme: AppTheme.light(),
+              home: KasirNotaScreen(viewModel: vm),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Awalnya keranjang kosong -> FloatingTransactionTotalBar tersembunyi
+        expect(
+          find.byKey(const ValueKey('kasir_submit_nota_button')),
+          findsNothing,
+        );
+
+        // Tap + Tambah -> morphing ke stepper & bar total gelap muncul
+        await tester.tap(
+          find.byKey(ValueKey('kasir_add_${firstBarang.idBarang}')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('kasir_submit_nota_button')),
+          findsOneWidget,
+        );
+        expect(find.byType(AnimatedQtyText), findsOneWidget);
+        expect(find.byType(AnimatedRupiahCounter), findsWidgets);
+
+        // Tambah qty menjadi 2
+        await tester.tap(
+          find.byKey(ValueKey('kasir_inc_${firstBarang.idBarang}')),
+        );
+        await tester.pumpAndSettle();
+        expect(vm.kasirQtyFor(firstBarang), 2);
+
+        // Simpan Nota ke SQLite
+        await tester.tap(
+          find.byKey(const ValueKey('kasir_submit_nota_button')),
+        );
+        await flushAsync(tester, until: () => vm.notas.isNotEmpty);
+        expect(vm.errorMessage, isNull);
+        expect(vm.notas.length, 1);
+        final createdNota = vm.notas.first;
+        expect(
+          vm.barangs
+              .firstWhere((b) => b.idBarang == firstBarang.idBarang)
+              .stokBarang,
+          initialStock - 2,
+        );
+
+        // Buka Riwayat Nota dari header
+        await tester.tap(find.text('Riwayat'));
+        await tester.pumpAndSettle();
+        expect(find.text('Riwayat Nota'), findsOneWidget);
+        expect(
+          find.byKey(ValueKey('nota_card_${createdNota.idNota}')),
+          findsOneWidget,
+        );
+
+        // Buka Detail & Edit Nota
+        await tester.tap(
+          find.byKey(ValueKey('nota_card_${createdNota.idNota}')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Detail Nota #${createdNota.idNota}'),
+          findsOneWidget,
+        );
+
+        // Tambah qty menjadi 3 lalu Simpan Perubahan
+        await scrollAndTap(
+          tester,
+          find.byKey(ValueKey('detail_nota_${firstBarang.idBarang}_inc')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('3'), findsOneWidget);
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('detail_nota_save_button')),
+        );
+        await flushAsync(
+          tester,
+          until: () =>
+              find.byType(DetailNotaScreen).evaluate().isEmpty &&
+              vm.barangs
+                      .firstWhere((b) => b.idBarang == firstBarang.idBarang)
+                      .stokBarang ==
+                  initialStock - 3,
+        );
+        expect(find.byType(DetailNotaScreen), findsNothing);
+        expect(
+          vm.barangs
+              .firstWhere((b) => b.idBarang == firstBarang.idBarang)
+              .stokBarang,
+          initialStock - 3,
+        );
+
+        // Buka Detail lagi, uji konfirmasi hapus inline lalu Ya, Hapus -> stok kembali penuh
+        await scrollAndTap(
+          tester,
+          find.byKey(ValueKey('nota_card_${createdNota.idNota}')),
+        );
+        await tester.pumpAndSettle();
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('detail_nota_delete_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('confirm_delete_tx_button')),
+          findsOneWidget,
+        );
+
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('confirm_delete_tx_button')),
+        );
+        await flushAsync(tester, until: () => vm.notas.isEmpty);
+        expect(vm.notas, isEmpty);
+        expect(
+          vm.barangs
+              .firstWhere((b) => b.idBarang == firstBarang.idBarang)
+              .stokBarang,
+          initialStock,
+        );
+      },
+    );
+
+    testWidgets(
+      'Alur UI Faktur Masuk -> Riwayat Faktur -> Detail Edit -> Hapus Faktur & bebas overflow 320x568 skala 1.4x',
+      (tester) async {
+        final vm = await setupTxVm(tester);
+        final targetBarang = vm.barangs.first;
+        final initialStock = targetBarang.stokBarang;
+
+        await tester.binding.setSurfaceSize(const Size(320, 568));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        await tester.pumpWidget(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider<SyncService>.value(value: syncService),
+              Provider<InventoryRepository>.value(value: inventoryRepository),
+              ChangeNotifierProvider<AuthViewModel>.value(value: viewModel),
+            ],
+            child: MaterialApp(
+              theme: AppTheme.light(),
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  disableAnimations: true,
+                  textScaler: const TextScaler.linear(1.4),
+                ),
+                child: child!,
+              ),
+              home: FakturMasukScreen(viewModel: vm),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        // Pilih barang dari Katalog Bottom Sheet
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('faktur_add_catalog_button')),
+        );
+        await tester.pumpAndSettle();
+        await scrollAndTap(
+          tester,
+          find.text(targetBarang.namaBarang).last,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Selesai'));
+        await tester.pumpAndSettle();
+
+        // Verifikasi preview proyeksi stok `Stok: X → X+1` tampil dan tidak overflow
+        await tester.ensureVisible(
+          find.text('Stok: $initialStock → ${initialStock + 1}'),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Stok: $initialStock → ${initialStock + 1}'),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+
+        await tester.tap(find.byKey(const ValueKey('faktur_submit_button')));
+        await flushAsync(tester, until: () => vm.fakturs.length == 1);
+        expect(vm.errorMessage, isNull);
+        expect(vm.fakturs.length, 1);
+        final savedFaktur = vm.fakturs.first;
+        expect(
+          vm.barangs
+              .firstWhere((b) => b.idBarang == targetBarang.idBarang)
+              .stokBarang,
+          initialStock + 1,
+        );
+
+        // Buka Riwayat Faktur -> Detail Edit -> Hapus Faktur
+        await tester.tap(find.text('Riwayat'));
+        await tester.pumpAndSettle();
+        expect(find.text('Riwayat Faktur Masuk'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+
+        await scrollAndTap(
+          tester,
+          find.byKey(ValueKey('faktur_card_${savedFaktur.idFaktur}')),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('detail_faktur_delete_button')),
+        );
+        await tester.pumpAndSettle();
+        await scrollAndTap(
+          tester,
+          find.byKey(const ValueKey('confirm_delete_tx_button')),
+        );
+        await flushAsync(tester, until: () => vm.fakturs.isEmpty);
+        expect(vm.fakturs, isEmpty);
+        expect(
+          vm.barangs
+              .firstWhere((b) => b.idBarang == targetBarang.idBarang)
+              .stokBarang,
+          initialStock,
+        );
       },
     );
   });
